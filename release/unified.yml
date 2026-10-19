@@ -1,0 +1,29 @@
+# 统一入口：复用实际自动场控配置；启动时关闭场控，录制独立操作。
+version: 2
+dashboard: true
+start_enabled: false
+douyin_userscript:
+  enabled: true
+  port: 2025
+  key_file: ../../.live-archive-userscript-key
+directory: ../data/unified
+injection:
+  system_proxy: true
+  proxy_port: 2024
+  mitmdump: mitmdump
+accounts:
+  - id: douyin-main
+    platform: douyin
+    scheduler: {min_interval_ms: 8000, account_per_minute: 6}
+  - id: wechat-main
+    platform: wechat_channels
+    scheduler: {min_interval_ms: 8000, account_per_minute: 6}
+tasks:
+  - id: douyin-main
+    label: 抖音直播间
+    account_id: douyin-main
+    config: douyin-auto.yml
+  - id: wechat-main
+    label: 视频号直播间
+    account_id: wechat-main
+    config: wechat-auto.yml

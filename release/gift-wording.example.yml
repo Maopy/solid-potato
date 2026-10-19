@@ -1,0 +1,53 @@
+# Merge rules.gift.variation into the existing room YAML; this is not a standalone room config.
+rules:
+  gift:
+    variation:
+      enabled: true
+      unknown_templates:
+        - '霸气！感谢{nickname}的{gift_list}'
+        - '{nickname}太给力了！感谢{gift_list}'
+        - '漂亮！谢谢{nickname}送来的{gift_list}'
+        - '感谢{nickname}的{gift_list}，气氛直接拉满'
+        - '{nickname}这一手帅气！感谢{gift_list}'
+        - '感谢{nickname}送上{gift_list}，一起燃起来'
+      tiers:
+        - min_unit_value: 0
+          templates:
+            - '感谢{nickname}的{gift_list}，给力！'
+            - '{nickname}帅气！谢谢你的{gift_list}'
+            - '漂亮！感谢{nickname}送来的{gift_list}'
+            - '感谢{nickname}的{gift_list}，气氛起来了'
+            - '{nickname}太棒了！感谢{gift_list}'
+            - '谢谢{nickname}送上{gift_list}，一起嗨起来'
+            - '感谢{nickname}的{gift_list}，这波很赞'
+            - '{nickname}有排面！感谢你的{gift_list}'
+        - min_unit_value: 100
+          templates:
+            - '霸气！感谢{nickname}送来的{gift_list}'
+            - '{nickname}这波太帅了！感谢{gift_list}'
+            - '感谢{nickname}的{gift_list}，排面安排上了'
+            - '{nickname}太给力了！{gift_list}把气氛拉满'
+            - '漂亮的一手！感谢{nickname}的{gift_list}'
+            - '感谢{nickname}送上{gift_list}，这波够燃'
+            - '{nickname}帅气出手！谢谢你的{gift_list}'
+            - '感谢{nickname}的{gift_list}，气势直接拉起来'
+        - min_unit_value: 1000
+          templates:
+            - '太霸气了！感谢{nickname}的{gift_list}，排面拉满'
+            - '{nickname}这波太炸了！感谢{gift_list}'
+            - '感谢{nickname}送来的{gift_list}，直接燃爆了'
+            - '{nickname}出手就是排面！感谢你的{gift_list}'
+            - '霸气十足！感谢{nickname}送上{gift_list}'
+            - '感谢{nickname}的{gift_list}，这波帅到飞起'
+            - '{nickname}太猛了！感谢{gift_list}，气势拉满'
+            - '感谢{nickname}的{gift_list}，这一手真的炸裂'
+        - min_unit_value: 10000
+          templates:
+            - '霸气冲天！感谢{nickname}的{gift_list}，顶级排面'
+            - '{nickname}这波封神了！感谢{gift_list}'
+            - '感谢{nickname}送来的{gift_list}，这排面直接拉爆'
+            - '{nickname}王者出手！感谢{gift_list}，气势全开'
+            - '太炸裂了！感谢{nickname}的{gift_list}，燃到顶了'
+            - '感谢{nickname}的{gift_list}，霸气到没朋友'
+            - '{nickname}这一手震撼全场！感谢{gift_list}'
+            - '感谢{nickname}送上{gift_list}，这波排面天花板'

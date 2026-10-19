@@ -1,0 +1,27 @@
+# 所有示例任务均不自动发送；按说明编辑对应房间配置。
+version: 2
+directory: ../data/controller
+injection:
+  system_proxy: true
+  proxy_port: 2024
+  mitmdump: mitmdump
+accounts:
+  - id: douyin-main
+    platform: douyin
+    scheduler: {min_interval_ms: 8000, account_per_minute: 6}
+  - id: wechat-main
+    platform: wechat_channels
+    scheduler: {min_interval_ms: 8000, account_per_minute: 6}
+tasks:
+  - id: douyin-a
+    label: 抖音直播间甲
+    account_id: douyin-main
+    config: douyin.yml
+  - id: douyin-b
+    label: 抖音直播间乙
+    account_id: douyin-main
+    config: douyin-second.yml
+  - id: wechat-a
+    label: 视频号直播间
+    account_id: wechat-main
+    config: wechat-observe.yml

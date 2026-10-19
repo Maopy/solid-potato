@@ -1,0 +1,8 @@
+# 可选配置片段；默认已提供录制入口，只有点击“录制直播”才录制。
+recording:
+  enabled: true
+  ffmpeg: ffmpeg
+  segment_seconds: 1800
+  # 相对路径以实际 YAML 所在目录为基准。
+  # output_dir: ../data/recordings
+# 多房间 controller 使用 controller.yml 顶层 recording 设置。

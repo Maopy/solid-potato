@@ -1,0 +1,11 @@
+# 共享的礼物感谢昵称表。用平台消息中的完整用户 ID，不是昵称或房间号。
+# 将下面对应平台的 {} 替换为映射，例如：
+# douyin:
+#   '抖音完整用户ID': '霸气哥'
+# wechat_channels:
+#   '视频号完整用户ID': '排面姐'
+# 修改后重启场控并重新打开直播页。
+version: 1
+platforms:
+  douyin: {}
+  wechat_channels: {}

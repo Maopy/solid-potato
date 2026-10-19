@@ -1,0 +1,12 @@
+/target/
+/data/
+*.sqlite3
+*.ts
+*.mp4
+live-archive.toml
+moderation.yml
+moderation.wechat.yml
+
+/dist/
+release/douyin.local.yml
+release/wechat.local.yml

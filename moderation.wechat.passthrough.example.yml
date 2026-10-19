@@ -1,0 +1,16 @@
+# 临时诊断：只转发 HTTPS，用于确认 loading 是否由解密引起。
+# 这个模式不注入按钮，不采集内容。
+version: 1
+mode: observe
+room:
+  platform: wechat_channels
+  adapter: wechat_channels.desktop_probe
+  url: https://channels.weixin.qq.com/web/pages/live
+injection:
+  system_proxy: true
+  tls_passthrough: true
+  proxy_port: 2024
+  mitmdump: mitmdump
+storage:
+  directory: data/moderation-wechat
+duration_seconds: 0

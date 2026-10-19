@@ -1,0 +1,16 @@
+version: 1
+mode: observe
+room:
+  platform: wechat_channels
+  adapter: wechat_channels.desktop_probe
+  url: https://channels.weixin.qq.com/web/pages/live
+injection:
+  system_proxy: true
+  # 保留与正常模式相同的域名 TLS 解密，关闭所有页面改写/脚本/桥接轮询。
+  tls_only: true
+  proxy_port: 2024
+  mitmdump: mitmdump
+storage:
+  directory: data/moderation-wechat
+# 对比诊断最多一分钟，提前 Ctrl-C 也会恢复原代理。
+duration_seconds: 60

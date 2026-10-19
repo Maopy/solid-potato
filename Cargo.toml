@@ -1,0 +1,39 @@
+[package]
+name = "live-archive-core"
+version = "0.3.23"
+edition = "2024"
+license = "LicenseRef-MIT-Common-Clause"
+description = "Cross-platform live-stream recording core"
+
+[workspace]
+members = ["crates/live-archive-gui"]
+resolver = "2"
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+directories = "6.0"
+futures-util = "0.3"
+keyring = "3.6"
+regex = "1.12"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rusqlite = { version = "0.38", features = ["bundled", "chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+thiserror = "2.0"
+toml = "0.8"
+tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.24"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2.5", features = ["serde"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.24"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

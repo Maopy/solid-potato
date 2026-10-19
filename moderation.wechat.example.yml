@@ -1,0 +1,33 @@
+version: 1
+# 观察模式：可选候选礼物文案日志预览，始终不填入或发送。
+mode: observe
+room:
+  platform: wechat_channels
+  adapter: wechat_channels.desktop_probe
+  # 客户端内的页面路由，不表示已确认直播间身份。
+  url: https://channels.weixin.qq.com/web/pages/live
+injection:
+  # 启动时设置系统 HTTP/HTTPS 代理并处理本地 CA，退出恢复原代理。
+  system_proxy: true
+  proxy_port: 2024
+  mitmdump: mitmdump
+storage:
+  raw_messages: true
+  retention:
+    enabled: true
+    raw_days: 7
+    raw_max_mib: 2048
+    audit_days: 30
+    preserved_runs: []
+  directory: data/moderation-wechat
+duration_seconds: 0
+# 先采集，再用 moderation inspect-gift-targets 列出本地来源目标 ID。
+# 手动确认当前主播的目标后再启用；不能确定时保持关闭。
+candidate_preview:
+  enabled: false
+  # recipient_user_id: '填入明确选定的来源目标 ID'
+
+# Optional full sender account user ID for network echo matching.
+# Required for Douyin echo confirmation; recommended for WeChat.
+# delivery:
+#   actor_user_id: 'sender-account-user-id'

@@ -1,0 +1,61 @@
+version: 1
+nickname_mapping:
+  file: nickname-mapping.yml
+mode: fill_only
+room:
+  platform: douyin
+  adapter: douyin.live_page
+  url: https://live.douyin.com/139244611014
+injection:
+  proxy_port: 2024
+  mitmdump: mitmdump
+storage:
+  raw_messages: true
+  retention:
+    enabled: true
+    raw_days: 7
+    raw_max_mib: 2048
+    audit_days: 30
+    preserved_runs: []
+  directory: ../data/douyin
+duration_seconds: 0
+rules:
+  gift:
+    variation:
+      enabled: true
+    template: '感谢{nickname}送来的{gift_list}'
+    emojis: ['🎁', '🎉', '💖', '✨', '🌟', '💐']
+    enabled: true
+    show_quantity: false
+    overflow_template: '感谢礼物飘屏'
+  welcome:
+    # 每个直播间收集 30 秒后合并欢迎。
+    enabled: true
+  supporter_welcome:
+    enabled: true
+    template: '欢迎{title}{nickname}来到直播间，感谢支持！'
+  fansclub_joined:
+    enabled: false
+  upgrade:
+    enabled: false
+scheduler:
+  min_interval_ms: 8000
+  account_per_minute: 6
+limits:
+  max_text_chars: 80
+sending:
+  automatic: true
+
+# Optional full sender account user ID for network echo matching.
+# Required for Douyin echo confirmation; recommended for WeChat.
+# delivery:
+#   actor_user_id: 'sender-account-user-id'
+
+# 定时文案默认关闭；启用时还需要 sending.automatic: true。
+timed_messages:
+  enabled: false
+  interval_seconds: 300
+  messages:
+    - '新来的朋友欢迎呀，喜欢直播可以点个关注✨'
+    - '精彩继续，喜欢就一起聊起来🎉'
+    - '感谢大家的陪伴，欢迎常来玩💖'

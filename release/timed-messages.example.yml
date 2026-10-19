@@ -1,0 +1,11 @@
+# 配置片段：合并到房间 YAML 顶层；不能单独作为房间配置启动。
+# 还需要 sending.automatic: true。按原文发送，可自行添加 emoji。
+timed_messages:
+  enabled: true
+  interval_seconds: 300
+  # 时间与评论条数同时达到才发；0 表示只按时间。仅统计采集开启后的新观众评论。
+  min_comments: 5
+  messages:
+    - '新来的朋友欢迎呀，喜欢直播可以点个关注✨'
+    - '精彩继续，喜欢就一起聊起来🎉'
+    - '感谢大家的陪伴，欢迎常来玩💖'

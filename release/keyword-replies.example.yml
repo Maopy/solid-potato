@@ -1,0 +1,10 @@
+# 配置片段：合并到实际启动使用的 YAML；示例文件不会单独自动加载。
+keyword_replies:
+  enabled: true
+  cooldown_seconds: 60
+  rules:
+    - keywords: ['胎记']
+      reply: '手臂是胎记'
+      match_mode: contains
+# 同一关键词和同一回复分别冷却；多个关键词可以共用回复。
+# 例如 keywords: ['胎记', '手臂']，两者共用“手臂是胎记”的冷却。

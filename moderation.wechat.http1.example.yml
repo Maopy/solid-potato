@@ -1,0 +1,16 @@
+version: 1
+mode: observe
+room:
+  platform: wechat_channels
+  adapter: wechat_channels.desktop_probe
+  url: https://channels.weixin.qq.com/web/pages/live
+injection:
+  system_proxy: true
+  tls_only: true
+  # 相对仅解密模式只改变 HTTP/2 协商，仍不注入任何页面代码。
+  http2: false
+  proxy_port: 2024
+  mitmdump: mitmdump
+storage:
+  directory: data/moderation-wechat
+duration_seconds: 60

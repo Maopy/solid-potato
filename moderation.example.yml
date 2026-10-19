@@ -1,0 +1,61 @@
+# 复制为 moderation.yml 后编辑。与录屏的 live-archive.toml 独立。
+version: 1
+# observe / rules_preview / scheduler_preview / fill_only；所有模式均不发送。
+mode: scheduler_preview
+room:
+  platform: douyin
+  adapter: douyin.live_page
+  url: https://live.douyin.com/139244611014
+injection:
+  proxy_port: 2024
+  mitmdump: mitmdump
+storage:
+  raw_messages: true
+  retention:
+    enabled: true
+    raw_days: 7
+    raw_max_mib: 2048
+    audit_days: 30
+    preserved_runs: []
+  # 相对路径以本配置文件所在目录为基准。
+  directory: data/moderation-probe
+# 0 表示一直运行，Ctrl-C 停止；非零最多 3600 秒。
+duration_seconds: 0
+rules:
+  gift:
+    emojis: ['🎁', '🎉', '💖', '✨', '🌟', '💐']
+    enabled: true
+    template: '感谢{nickname}送来的{gift_list}'
+    overflow_template: '感谢{nickname}，感谢礼物飘屏'
+  welcome:
+    enabled: true
+    template: '欢迎{nickname}来到直播间'
+  supporter_welcome:
+    enabled: true
+    template: '欢迎{title}{nickname}来到直播间，感谢支持！'
+  fansclub_joined:
+    enabled: true
+    template: '欢迎{nickname}加入粉丝团'
+  upgrade:
+    enabled: true
+    fansclub: true
+    honor: true
+    wealth: true
+    allow_inferred_levels: false
+    template: '恭喜{nickname}的{level_name}升级到{new_level}级'
+scheduler:
+  min_interval_ms: 8000
+  account_per_minute: 6
+limits:
+  max_text_chars: 80
+  max_active_users: 500
+  max_gift_items: 100
+  max_pending_actions: 20
+  max_dedupe_entries: 10000
+# 仅 mode: fill_only 可用；启用后只填一次固定文案，禁用自动规则填入。
+# fill_test_text: '场控配置测试（不会发送）'
+
+# Optional full sender account user ID for network echo matching.
+# Required for Douyin echo confirmation; recommended for WeChat.
+# delivery:
+#   actor_user_id: 'sender-account-user-id'

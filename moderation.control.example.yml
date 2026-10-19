@@ -1,0 +1,23 @@
+# 一个进程、一个代理，管理多个平台和直播间。
+version: 2
+directory: data/moderation-control
+injection:
+  system_proxy: true
+  proxy_port: 2024
+  mitmdump: mitmdump
+accounts:
+  - id: douyin-main
+    platform: douyin
+    scheduler: {min_interval_ms: 8000, account_per_minute: 6}
+  - id: wechat-main
+    platform: wechat_channels
+    scheduler: {min_interval_ms: 8000, account_per_minute: 6}
+tasks:
+  - id: douyin-a
+    label: 抖音场控
+    account_id: douyin-main
+    config: moderation.example.yml
+  - id: wechat-a
+    label: 视频号场控
+    account_id: wechat-main
+    config: moderation.wechat.example.yml

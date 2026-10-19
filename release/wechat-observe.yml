@@ -1,0 +1,31 @@
+version: 1
+nickname_mapping:
+  file: nickname-mapping.yml
+mode: observe
+room:
+  platform: wechat_channels
+  adapter: wechat_channels.desktop_probe
+  url: https://channels.weixin.qq.com/web/pages/live
+injection:
+  system_proxy: true
+  proxy_port: 2024
+  mitmdump: mitmdump
+storage:
+  raw_messages: true
+  retention:
+    enabled: true
+    raw_days: 7
+    raw_max_mib: 2048
+    audit_days: 30
+    preserved_runs: []
+  directory: ../data/wechat
+duration_seconds: 0
+
+# 定时文案默认关闭；启用时还需要 sending.automatic: true。
+timed_messages:
+  enabled: false
+  interval_seconds: 300
+  messages:
+    - '新来的朋友欢迎呀，喜欢直播可以点个关注✨'
+    - '精彩继续，喜欢就一起聊起来🎉'
+    - '感谢大家的陪伴，欢迎常来玩💖'

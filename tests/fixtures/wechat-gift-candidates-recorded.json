@@ -1,0 +1,501 @@
+{
+  "source": "recorded_wechat_candidates_anonymized",
+  "quantity_mode": "unknown",
+  "room_verified": false,
+  "selected_target": "target-selected",
+  "events": [
+    {
+      "at_ms": 0,
+      "document": "document-1",
+      "event": {
+        "seq": 1,
+        "event_id": "event-1",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-1",
+        "user_id": "user-1",
+        "nickname": "观众1",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-1",
+          "gift_name": "抱抱",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 20104,
+      "document": "document-1",
+      "event": {
+        "seq": 2,
+        "event_id": "event-2",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-2",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-2",
+          "gift_name": "小星星",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 24122,
+      "document": "document-1",
+      "event": {
+        "seq": 3,
+        "event_id": "event-3",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-3",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-3",
+          "gift_name": "玫瑰",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 30146,
+      "document": "document-1",
+      "event": {
+        "seq": 4,
+        "event_id": "event-4",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-4",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-4",
+          "gift_name": "棒棒糖",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 38188,
+      "document": "document-1",
+      "event": {
+        "seq": 5,
+        "event_id": "event-5",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-5",
+        "user_id": "user-1",
+        "nickname": "观众1",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-5",
+          "gift_name": "锦鲤",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 52261,
+      "document": "document-1",
+      "event": {
+        "seq": 6,
+        "event_id": "event-6",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-6",
+        "user_id": "user-3",
+        "nickname": "观众3",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-6",
+          "gift_name": "一箭钟情",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 54275,
+      "document": "document-1",
+      "event": {
+        "seq": 7,
+        "event_id": "event-7",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-7",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-2",
+          "gift_name": "小星星",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 56287,
+      "document": "document-1",
+      "event": {
+        "seq": 8,
+        "event_id": "event-8",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-8",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-3",
+          "gift_name": "玫瑰",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 56288,
+      "document": "document-1",
+      "event": {
+        "seq": 9,
+        "event_id": "event-9",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-9",
+        "user_id": "user-4",
+        "nickname": "观众4",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-7",
+          "gift_name": "火箭",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-other-1",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 62315,
+      "document": "document-1",
+      "event": {
+        "seq": 10,
+        "event_id": "event-10",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-10",
+        "user_id": "user-5",
+        "nickname": "观众5",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-8",
+          "gift_name": "萌宠猫咪",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 62315,
+      "document": "document-1",
+      "event": {
+        "seq": 11,
+        "event_id": "event-11",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-11",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-4",
+          "gift_name": "棒棒糖",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 70349,
+      "document": "document-1",
+      "event": {
+        "seq": 12,
+        "event_id": "event-12",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-12",
+        "user_id": "user-6",
+        "nickname": "观众6",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-9",
+          "gift_name": "游乐园",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-other-2",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 70349,
+      "document": "document-1",
+      "event": {
+        "seq": 13,
+        "event_id": "event-13",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-13",
+        "user_id": "user-4",
+        "nickname": "观众4",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-10",
+          "gift_name": "麒麟献瑞",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-other-1",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 72360,
+      "document": "document-1",
+      "event": {
+        "seq": 14,
+        "event_id": "event-14",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-14",
+        "user_id": "user-3",
+        "nickname": "观众3",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-11",
+          "gift_name": "桃花岛",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 72360,
+      "document": "document-1",
+      "event": {
+        "seq": 15,
+        "event_id": "event-15",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-15",
+        "user_id": "user-4",
+        "nickname": "观众4",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-11",
+          "gift_name": "桃花岛",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-other-1",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 126643,
+      "document": "document-1",
+      "event": {
+        "seq": 16,
+        "event_id": "event-16",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-16",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-2",
+          "gift_name": "小星星",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    },
+    {
+      "at_ms": 130663,
+      "document": "document-1",
+      "event": {
+        "seq": 17,
+        "event_id": "event-17",
+        "event_type": "gift.candidate",
+        "source_kind": "network",
+        "native_event_id": "message-17",
+        "user_id": "user-2",
+        "nickname": "观众2",
+        "payload": {
+          "combo_product_count": 1,
+          "confidence": "candidate",
+          "decoder": "wechat.app20009.reward.candidate.v1",
+          "float_type": 0,
+          "gift_id": "product-3",
+          "gift_name": "玫瑰",
+          "gift_name_truncated": false,
+          "is_floatmsg": 0,
+          "live_eligible": false,
+          "message_type": 20009,
+          "quantity_mode": "unknown",
+          "recipient_user_id": "target-selected",
+          "reward_product_count": 1,
+          "room_verified": false
+        }
+      }
+    }
+  ]
+}
