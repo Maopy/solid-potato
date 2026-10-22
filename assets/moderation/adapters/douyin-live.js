@@ -98,6 +98,16 @@ sdk.onDispose(() => {
 });
 const seen = new WeakMap();
 let chatRoot = null, chatObserver = null, rootTimer = null;
+const publicRows = new Set();
+const publicScope=()=>BOOT.timed_messages?.count_scope==='public_screen';
+const publicRowId=row=>row.getAttribute?.('data-index');
+const observePublicRow=row=>{
+  const id=publicRowId(row);
+  if(!publicScope()||id===null||id===undefined||!String(row.textContent||'').trim()||publicRows.has(id))return;
+  publicRows.add(id);
+  if(publicRows.size>16384)publicRows.delete(publicRows.values().next().value);
+  sdk.emit('public.activity','dom',{content:sdk.clean(row.textContent||'',512),decoder:'douyin.public_screen.v1',observed_at_ms:Date.now()},{native_event_id:'screen:'+id});
+};
 const comment = row => {
   const nickname = sdk.clean(row.querySelector('[class*="webcast-chatroom___user-name"], .hts-live-text-user')?.textContent || "", 128).trim().replace(/[：:]\s*$/, "").trim();
   const content = sdk.clean(row.querySelector('[class*="webcast-chatroom___content"]')?.textContent || "");
@@ -109,6 +119,7 @@ const inspectNode = node => {
   const parent = element.closest?.('[data-index]');
   const rows = new Set([...(parent ? [parent] : []), ...(element.matches('[data-index]') ? [element] : [...element.querySelectorAll('[data-index]')])]);
   for (const row of rows) {
+    observePublicRow(row);
     const { nickname, content, signature } = comment(row);
     if (seen.get(row) === signature) continue;
     seen.set(row, signature);
@@ -122,7 +133,7 @@ const attachChat = () => {
   chatRoot = root;
   if (!root) return;
   // Baseline is historical UI content. Do not replay it as fresh interaction.
-  for (const row of root.querySelectorAll('[data-index]')) seen.set(row, comment(row).signature);
+  for (const row of root.querySelectorAll('[data-index]')) {seen.set(row, comment(row).signature);const id=publicRowId(row);if(id!==null&&id!==undefined)publicRows.add(id);}
   chatObserver = new MutationObserver(records => {
     for (const record of records) {
       inspectNode(record.target);

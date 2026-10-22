@@ -265,6 +265,7 @@ impl Controller {
                 bridge.set_moderation_enabled(loaded.config.start_enabled)?;
                 bridge.configure_delivery(options.delivery)?;
                 bridge.configure_timed(options.timed_messages)?;
+                bridge.configure_likes(options.likes)?;
                 bridge.configure_keywords(options.keyword_replies)?;
                 bridge.configure_retention(options.retention)?;
                 bridge.maintain_journal(true)?;
@@ -386,10 +387,7 @@ impl Controller {
 
 pub async fn serve(path: &Path) -> Result<()> {
     let loaded = LoadedControl::load(path)?;
-    #[cfg(unix)]
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    #[cfg(windows)]
-    let mut interrupt = tokio::signal::windows::ctrl_c()?;
+    let mut interrupt = super::shutdown::ShutdownSignals::new()?;
     let mut controller = Controller::bind(&loaded).await?;
     let scopes: Vec<_> = controller.tasks.values().map(|t| t.scope.clone()).collect();
     let source = controller.addon()?;
@@ -510,6 +508,8 @@ pub async fn serve(path: &Path) -> Result<()> {
         None
     };
     let result = tokio::select! {_ = interrupt.recv()=>Ok(()),r=async {match &mut sidecar {Some(s)=>s.wait_for_exit().await,None=>std::future::pending().await}}=>r,_=tokio::time::sleep(Duration::from_secs(c.duration_seconds)),if c.duration_seconds!=0=>Ok(())};
+    // Release network routing before waiting for recording finalization.
+    let restored = proxy.as_ref().map_or(Ok(()), |p| p.stop());
     if let Some(dashboard) = &mut dashboard {
         dashboard.stop().await;
     }
@@ -522,7 +522,6 @@ pub async fn serve(path: &Path) -> Result<()> {
     } else {
         Ok(())
     };
-    let restored = proxy.as_ref().map_or(Ok(()), |p| p.stop());
     let proxy_stopped = if let Some(s) = &mut sidecar {
         s.stop().await
     } else {

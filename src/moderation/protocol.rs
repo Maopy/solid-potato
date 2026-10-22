@@ -143,6 +143,8 @@ pub struct Hello {
     pub page_url: String,
     pub document_id: String,
     pub adapter_id: String,
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -200,6 +202,7 @@ pub fn identifier(value: &str, max: usize) -> bool {
 pub fn sanitize(event: &ProbeEvent) -> ProbeEvent {
     let mut result = event.clone();
     let permitted: &[&str] = match event.event_type.as_str() {
+        "public.activity" => &["content", "decoder", "observed_at_ms", "message_type"],
         "recording.result" => &["request_id", "state", "message"],
         "chat.received" => &["content", "decoder", "live_eligible", "observed_at_ms"],
         "chat.keyword_candidate" | "chat.activity" => &[
@@ -364,6 +367,7 @@ pub fn sanitize(event: &ProbeEvent) -> ProbeEvent {
             "combo_end",
             "has_group_id",
         ],
+        "probe.status" if event.payload["stage"] == "input_wait_changed" => &["stage", "reason"],
         "probe.status" => &["stage"],
         "probe.gap" => &["reason"],
         "probe.skipped" => &[

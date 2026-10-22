@@ -150,6 +150,8 @@ enum ConfigCommand {
 }
 #[derive(Subcommand)]
 enum ModerationCommand {
+    #[command(hide = true)]
+    ProxyWatchdog,
     /// Runs multiple room tasks behind one shared injection proxy.
     Serve {
         #[arg(long)]
@@ -275,6 +277,9 @@ async fn main() -> Result<()> {
     // Probes use a separate journal and do not open/migrate the recorder DB.
     if let Command::Moderation { command } = &cli.command {
         match command {
+            ModerationCommand::ProxyWatchdog => {
+                return live_archive_core::moderation::proxy_watchdog::run();
+            }
             ModerationCommand::InspectGiftTargets { journal } => {
                 let report = live_archive_core::moderation::gift_report::inspect_targets(journal)?;
                 println!("{}", serde_json::to_string_pretty(&report)?);

@@ -15,6 +15,7 @@ use url::Url;
 pub struct ProbeOptions {
     pub delivery: super::delivery::DeliveryConfig,
     pub timed_messages: super::timed::TimedConfig,
+    pub likes: super::likes::LikeConfig,
     pub keyword_replies: super::keywords::KeywordConfig,
     pub recording: super::recording::RecordingConfig,
     pub retention: super::retention::RetentionPolicy,
@@ -99,6 +100,7 @@ pub async fn run_probe_with_options(
     let ProbeOptions {
         delivery,
         timed_messages,
+        likes,
         keyword_replies,
         recording,
         retention,
@@ -183,11 +185,7 @@ pub async fn run_probe_with_options(
         bail!("automatic sending requires an injection fill mode without test text");
     }
     // Subscribe before native proxy/certificate commands so Ctrl-C during startup is retained.
-    #[cfg(unix)]
-    let mut stop_signal =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    #[cfg(windows)]
-    let mut stop_signal = tokio::signal::windows::ctrl_c()?;
+    let mut stop_signal = super::shutdown::ShutdownSignals::new()?;
     std::fs::create_dir_all(directory)?;
     let directory = directory.canonicalize()?;
     let database = directory.join("moderation-probe.sqlite3");
@@ -195,6 +193,7 @@ pub async fn run_probe_with_options(
     bridge.configure_ui(recording.enabled, false);
     bridge.configure_delivery(delivery)?;
     bridge.configure_timed(timed_messages)?;
+    bridge.configure_likes(likes)?;
     bridge.configure_keywords(keyword_replies)?;
     bridge.configure_retention(retention)?;
     bridge.maintain_journal(true)?;
@@ -329,6 +328,7 @@ pub async fn run_probe_with_options(
         result = sidecar.wait_for_exit() => result,
         _ = tokio::time::sleep(std::time::Duration::from_secs(duration_seconds)), if duration_seconds != 0 => Ok(()),
     };
+    let proxy_stop = proxy.as_ref().map_or(Ok(()), |proxy| proxy.stop());
     if waiting.is_ok() {
         println!(
             "Stopping collection; waiting up to 8 seconds for buffered event acknowledgements. Ctrl-C again ends this wait."
@@ -351,7 +351,6 @@ pub async fn run_probe_with_options(
     } else {
         Ok(())
     };
-    let proxy_stop = proxy.as_ref().map_or(Ok(()), |proxy| proxy.stop());
     let server_stop = server.stop().await;
     let sidecar_stop = sidecar.stop().await;
     if let Ok(mut bridge) = server.bridge.lock() {

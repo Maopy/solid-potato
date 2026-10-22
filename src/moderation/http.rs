@@ -268,6 +268,8 @@ async fn handle(
                 "/v1/raw" => {
                     bridge.raw_messages(&request.bearer, serde_json::from_slice(&request.body)?)
                 }
+                "/v1/likes/claim" => bridge
+                    .claim_like_period(&request.bearer, serde_json::from_slice(&request.body)?),
                 "/v1/poll" => bridge.poll(&request.bearer, serde_json::from_slice(&request.body)?),
                 "/v1/results" => {
                     bridge.fill_result(&request.bearer, serde_json::from_slice(&request.body)?)

@@ -3,6 +3,9 @@
 if (window.__liveArchiveModerationV1) return;
 const nativeFetch = window.fetch.bind(window);
 const documentId = crypto.randomUUID();
+const pairingStarted=performance.now();
+let tabClientId;
+if(BOOT.reload_handoff)try{const key='live-archive-tab-client';tabClientId=window.sessionStorage.getItem(key);if(!/^[a-f0-9-]{36}$/.test(tabClientId||'')){tabClientId=crypto.randomUUID();window.sessionStorage.setItem(key,tabClientId);}}catch(_){}
 const pending = [];
 let seq = 0, session = null, stopped = false, busy = false, timer = null;
 let truncated = false, bridgeError = null;
@@ -20,8 +23,9 @@ const applyModeration=state=>{
   return true;
 };
 let executingFillCommand=null;
-let fillExecutor = null, fillStatus = null, fillReport = null, lastFillResult = null;
+let fillExecutor = null, fillStatus = null, fillReport = null, lastFillResult = null, lastInputWait = undefined;
 const fillCache = new Map();
+let recordingState={state:"idle",task_id:null,error:null},recordingBusy=false,recordingPoll=null,recordingRequestedAt=0;
 const disposers = [];
 const sameRoom = () => typeof userscriptCurrentRoom === "function" ? userscriptCurrentRoom() : location.origin + location.pathname.replace(/\/$/, "") === BOOT.room_url;
 const post = async (path, body, token) => {
@@ -63,6 +67,7 @@ const emit = (type, source, payload = {}, identity = {}) => {
 const dispose = () => {
   if (stopped) return;
   stopped = true;
+  recordingState={...recordingState,state:'unknown'};
   clearTimeout(timer);
   for (const fn of disposers.splice(0).reverse()) { try { fn(); } catch (_) {} }
   pending.length = 0;
@@ -76,7 +81,7 @@ const sdk = { emit, clean, onDispose: fn => disposers.push(fn), onDrain: fn => d
     candidate_preview: candidateStatus ? {...candidateStatus,
       stale: stopped || !!bridgeError, pending: (candidateStatus.pending||[]).map(p=>({...p,
         remaining_ms: Math.max(0,p.remaining_ms-(performance.now()-candidateUpdatedAt))}))} : null,
-    timed_messages:timedStatus, keyword_replies:keywordStatus, raw: sdk.rawStatus?.() || null, decoder: decoderStatus, rules: previewStatus, previews: preview.map(item => ({ ...item })) }) };
+    likes:sdk.likes?.getStatus()||null,timed_messages:timedStatus, keyword_replies:keywordStatus, recording:{...window.__liveArchiveRecordingController?.getStatus?.(),...recordingState,busy:recordingBusy}, raw: sdk.rawStatus?.() || null, decoder: decoderStatus, rules: previewStatus, previews: preview.map(item => ({ ...item })) }) };
 sdk.onModerationChange=fn=>{moderationListeners.push(fn);if(BOOT.unified_ui)fn(moderationEnabled);};
 sdk.setModerationEnabled=async enabled=>{
   if(!session||stopped||draining)throw Error('直播页尚未连接');
@@ -85,18 +90,64 @@ sdk.setModerationEnabled=async enabled=>{
   const state=await post('control',{scope:{v:1,connection_id:session.connection_id,binding_id:session.binding_id,page_url:BOOT.room_url},enabled},session.token);
   applyModeration(state);return state;
 };
-sdk.startRecording=async()=>{
-  const controller=window.__liveArchiveRecordingController;
-  if(controller)return controller.start();
-  const check=window.WXU?.check_live_existing;
-  if(typeof check==='function'&&window.dl$?.create){
-    const [error,profile,live]=check({silence:true});
-    if(error)throw Error('请先进入并播放直播');
-    const result=await window.dl$.create({profile,live},{platform:'wxchannels'});
-    if(result?.error)throw Error('录制请求失败');return;
-  }
-  throw Error('录制入口尚未就绪，请重新打开并播放直播');
+sdk.claimLikePeriod=async()=>{
+  if(!session||stopped||!BOOT.like_period_ledger)throw Error('请连接支持点赞时段记录的新版后台');
+  return post('likes/claim',{v:1,connection_id:session.connection_id,binding_id:session.binding_id,page_url:BOOT.room_url},session.token);
 };
+const recordingApi=async(action,body)=>{
+  if(typeof userscriptRecordingTransport==='function')return userscriptRecordingTransport(action,body);
+  const response=await nativeFetch('/api/v1/download_task/'+action,action==='list'?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const result=await response.json();if(!response.ok||result.code!==0)throw Error(result.msg||'录制服务暂不可用');return result.data;
+};
+sdk.getRecordingStatus=()=>({...recordingState,busy:recordingBusy});
+sdk.refreshRecording=()=>{
+  if(recordingPoll)return recordingPoll;
+  if(!BOOT.recording||!session||stopped)return Promise.resolve(sdk.getRecordingStatus());
+  recordingPoll=(async()=>{
+    try{
+      const data=await recordingApi('list');if(stopped)return sdk.getRecordingStatus();
+      const platform=BOOT.adapter_id==='wechat_channels.desktop_probe'?'wechat_channels':'douyin';
+      let nickname;
+      if(platform==='wechat_channels')try{const [error,profile]=window.WXU?.check_live_existing?.({silence:true})||[];if(!error)nickname=profile?.nickname||profile?.contact?.nickname||profile?.author?.nickname;}catch(_){}
+      const matches=(data.list||[]).filter(t=>t.id===recordingState.task_id||t.platform===platform&&(platform==='douyin'?t.page_url===BOOT.room_url:!!nickname&&t.name===nickname));
+      const rank={downloading:0,waiting:1,paused:2,failed:3,finished:4};matches.sort((a,b)=>(rank[a.status]??5)-(rank[b.status]??5)||Number(b.id===recordingState.task_id)-Number(a.id===recordingState.task_id)||(b.created_at_ms||0)-(a.created_at_ms||0));
+      const task=matches[0],state={downloading:'recording',waiting:'starting',paused:'paused',failed:'failed',finished:'idle'};
+      if(task)recordingState={state:state[task.status]||'idle',task_id:task.id,error:task.error||null};
+      else if((data.list||[]).some(t=>!t.platform&&['waiting','downloading','paused'].includes(t.status)))recordingState={state:'unknown',task_id:null,error:'请更新后台以识别当前直播的录制状态'};
+      else if(recordingState.state!=='starting'||Date.now()-recordingRequestedAt>5000)recordingState={state:'idle',task_id:null,error:null};
+    }catch(e){recordingState={...recordingState,state:'unknown',error:e.message};}
+    return sdk.getRecordingStatus();
+  })().finally(()=>{recordingPoll=null;});return recordingPoll;
+};
+const recordingAction=async fn=>{
+  if(!BOOT.recording||!session||stopped||draining||!sameRoom())throw Error('录制连接不可用');
+  if(recordingBusy)throw Error('录制操作处理中');recordingBusy=true;
+  try{return await fn();}finally{recordingBusy=false;}
+};
+sdk.startRecording=()=>recordingAction(async()=>{
+  await sdk.refreshRecording();
+  if(recordingState.state==='unknown')throw Error(recordingState.error||'录制状态未知');
+  if(recordingState.state==='recording'||recordingState.state==='starting')return;
+  let result;
+  const controller=window.__liveArchiveRecordingController;
+  if(controller)result=await controller.start();
+  else{
+    const check=window.WXU?.check_live_existing;if(typeof check!=='function')throw Error('录制入口尚未就绪，请重新打开并播放直播');
+    const [error,profile,live]=check({silence:true});if(error)throw Error('请先进入并播放直播');
+    result=await recordingApi('create',{objects:[{platform:'wxchannels',content:{profile,live:window.WXU.recording_live_data?.(live)||live}}]});
+  }
+  recordingRequestedAt=Date.now();
+  recordingState={state:'starting',task_id:result?.task_id||result?.tasks?.[0]?.data?.id||null,error:null};
+  await sdk.refreshRecording();
+});
+sdk.pauseRecording=()=>recordingAction(async()=>{
+  await sdk.refreshRecording();if(!recordingState.task_id||!['recording','starting'].includes(recordingState.state))return;
+  await recordingApi('pause',{task_ids:[recordingState.task_id]});await sdk.refreshRecording();
+});
+sdk.resumeRecording=()=>recordingAction(async()=>{
+  await sdk.refreshRecording();if(!recordingState.task_id||recordingState.state!=='paused')return;
+  await recordingApi('start',{task_ids:[recordingState.task_id]});await sdk.refreshRecording();
+});
 Object.defineProperty(window, "__liveArchiveModerationV1", { value: sdk, configurable: true });
 const flushFillReport = async () => {
   if (!fillReport) return;
@@ -134,7 +185,7 @@ const tick = async () => {
   busy = true;
   try {
     if (!session) {
-      session = await post("hello", { v: 1, ticket: BOOT.ticket, page_url: BOOT.room_url, document_id: documentId, adapter_id: BOOT.adapter_id || "douyin.live_page" });
+      session = await post("hello", { v: 1, ticket: BOOT.ticket, page_url: BOOT.room_url, document_id: documentId, adapter_id: BOOT.adapter_id || "douyin.live_page", ...(tabClientId?{client_id:tabClientId}:{}) });
       if (stopped) {
         void post("goodbye", { v: 1, connection_id: session.connection_id, binding_id: session.binding_id, page_url: BOOT.room_url }, session.token).catch(() => {});
         return;
@@ -157,7 +208,9 @@ const tick = async () => {
     if (BOOT.automatic_send || BOOT.input_open_test) await fillExecutor?.prepareInput?.(fillStatus?.pending || (timedStatus?.active&&timedStatus.remaining_ms<=3000?1:0));
     if (stopped || !sameRoom()) { dispose(); return; }
     const pollStarted = BOOT.fill_preview ? performance.now() : 0;
-    const result = await post("poll", { ...scope, page_url: BOOT.room_url, ...(BOOT.wait_for_input ? {input_ready:fillExecutor?.getStatus().input_ready===true}: {}) }, session.token);
+    const inputState=fillExecutor?.getStatus();
+    if(BOOT.wait_for_input && inputState?.input_reason!==lastInputWait){lastInputWait=inputState?.input_reason;sdk.emit('probe.status','diagnostic',{stage:'input_wait_changed',reason:lastInputWait||'input_ready'});}
+    const result = await post("poll", { ...scope, page_url: BOOT.room_url, ...(BOOT.wait_for_input ? {input_ready:inputState?.input_ready===true}: {}) }, session.token);
     if (stopped || !sameRoom()) { dispose(); return; }
     if (result.draining === true || draining) {
       if (!draining) {
@@ -199,6 +252,10 @@ const tick = async () => {
     if (stopped) return;
     timer = setTimeout(tick, BOOT.adapter_id === "wechat_channels.desktop_probe" ? 2000 : 500);
   } catch (error) {
+    // A refresh can race the old document's goodbye. Its session expires in
+    // 30s on older backends; keep pairing with the same scoped ticket, without
+    // issuing commands or treating this temporary handover as a stopped page.
+    if(!session && typeof userscriptTransport==='function' && error.status===422 && error.message==='pairing denied' && performance.now()-pairingStarted<45000){bridgeError=null;timer=setTimeout(tick,1000);return;}
     // Keep unacknowledged IDs stable. Expired sessions require a page reload
     // and a new ticket; never silently rebind buffered events to another room.
     bridgeError = error.message;

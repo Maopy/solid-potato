@@ -46,9 +46,40 @@ fn websocket_update(snapshot: &TaskSnapshot) -> Result<String> {
 pub struct DownloadTaskBridge {
     states: Arc<Mutex<HashMap<String, TaskSnapshot>>>,
     feeds: Arc<Mutex<HashMap<String, broadcast::Sender<TaskSnapshot>>>>,
+    scopes: Arc<Mutex<HashMap<String, (String, String, i64)>>>,
 }
 
 impl DownloadTaskBridge {
+    pub async fn register_recording(
+        &self,
+        id: &str,
+        platform: crate::model::Platform,
+        page: &url::Url,
+    ) {
+        self.scopes.lock().await.insert(
+            id.into(),
+            (
+                platform.as_str().into(),
+                page.to_string(),
+                chrono::Utc::now().timestamp_millis(),
+            ),
+        );
+    }
+    pub async fn recording_list(&self) -> Vec<serde_json::Value> {
+        let list = self.list().await;
+        let scopes = self.scopes.lock().await;
+        list.into_iter()
+            .map(|t| {
+                let mut v = serde_json::to_value(&t).unwrap();
+                if let Some((platform, page, created)) = scopes.get(&t.id) {
+                    v["platform"] = serde_json::json!(platform);
+                    v["page_url"] = serde_json::json!(page);
+                    v["created_at_ms"] = serde_json::json!(created);
+                }
+                v
+            })
+            .collect()
+    }
     pub async fn list(&self) -> Vec<TaskSnapshot> {
         let mut tasks: Vec<_> = self.states.lock().await.values().cloned().collect();
         tasks.sort_by(|left, right| left.id.cmp(&right.id));

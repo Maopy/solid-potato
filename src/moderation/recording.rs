@@ -45,6 +45,19 @@ impl Default for RecordingConfig {
     }
 }
 impl RecordingConfig {
+    /// Media must outlive a disposable application/version directory.
+    pub fn output_directory(&self) -> Result<PathBuf> {
+        if let Some(path) = &self.output_dir {
+            return Ok(path.clone());
+        }
+        let user = directories::UserDirs::new()
+            .context("无法确定用户下载目录，请配置 recording.output_dir")?;
+        let downloads = user
+            .download_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| user.home_dir().join("Downloads"));
+        Ok(downloads.join("直播录屏"))
+    }
     pub fn validate(&self) -> Result<()> {
         if self.ffmpeg.as_os_str().is_empty()
             || self
@@ -92,6 +105,7 @@ impl RecordingRuntime {
         moderation_source: &str,
     ) -> Result<Self> {
         config.validate()?;
+        let output = config.output_directory()?;
         std::fs::create_dir_all(directory)?;
         let database = directory.join("recordings.sqlite3");
         TaskStore::open(&database)?;
@@ -118,10 +132,6 @@ impl RecordingRuntime {
         });
         let source = compose(moderation_source, &capture, &rooms)?;
         let (stopping, stop) = watch::channel(false);
-        let output = config
-            .output_dir
-            .clone()
-            .unwrap_or_else(|| directory.parent().unwrap_or(directory).join("recordings"));
         let output_display = output.display().to_string();
         let worker = tokio::spawn(run_worker(
             config,
@@ -177,6 +187,14 @@ struct Entry {
     running: Option<(watch::Sender<bool>, JoinHandle<Result<()>>)>,
     removed: bool,
 }
+fn anchor_directory_name(platform: Platform, title: &str) -> String {
+    let mut name = title.trim();
+    if platform == Platform::Douyin {
+        name = name.strip_suffix(" - 抖音直播").unwrap_or(name);
+        name = name.strip_suffix("的抖音直播间").unwrap_or(name);
+    }
+    crate::recorder::safe_file_name(name)
+}
 async fn run_worker(
     config: RecordingConfig,
     output: PathBuf,
@@ -205,8 +223,9 @@ async fn run_worker(
                     tasks.publish(TaskSnapshot{id:r.id,status:"failed".into(),name:r.title,error:Some("录制任务数量已达上限".into())}).await;continue;
                 }
                 let now=Utc::now();
-                let task=RecordingTask{id:Uuid::new_v4(),platform:r.platform,room_url:r.page_url.clone(),display_name:r.title.clone(),status:TaskStatus::Idle,output_dir:output.join(r.platform.as_str()).join(Uuid::new_v4().to_string()),created_at:now,updated_at:now};
+                let task=RecordingTask{id:Uuid::new_v4(),platform:r.platform,room_url:r.page_url.clone(),display_name:r.title.clone(),status:TaskStatus::Idle,output_dir:output.join(r.platform.as_str()).join(anchor_directory_name(r.platform,&r.title)),created_at:now,updated_at:now};
                 store.insert(&task)?;
+                tasks.register_recording(&r.id,r.platform,&r.page_url).await;
                 if tasks.detail(&r.id).await.is_none(){tasks.publish(TaskSnapshot{id:r.id.clone(),status:"waiting".into(),name:r.title.clone(),error:None}).await;}
                 entries.insert(r.id.clone(),Entry{request:r,task,running:None,removed:false});
             },
@@ -349,4 +368,60 @@ async fn record_one(
         tokio::select! {_=tokio::time::sleep(Duration::from_secs(5<<attempt))=>{},_=stop.changed()=>{}}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn anchor_folders_use_the_same_safe_name_across_sessions() {
+        assert_eq!(
+            anchor_directory_name(Platform::Douyin, "心怡076的抖音直播间 - 抖音直播"),
+            "心怡076"
+        );
+        assert_eq!(
+            anchor_directory_name(Platform::WeChatChannels, "心怡076"),
+            "心怡076"
+        );
+        assert_eq!(
+            anchor_directory_name(Platform::Douyin, "../主播/测试"),
+            "_主播_测试"
+        );
+        assert_eq!(anchor_directory_name(Platform::Douyin, ".."), "未命名主播");
+    }
+
+    #[test]
+    fn default_media_directory_is_under_system_downloads_and_not_the_release() {
+        let config = RecordingConfig::default();
+        let user = directories::UserDirs::new().unwrap();
+        let downloads = user
+            .download_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| user.home_dir().join("Downloads"));
+        assert_eq!(
+            config.output_directory().unwrap(),
+            downloads.join("直播录屏")
+        );
+        assert!(config.output_directory().unwrap().is_absolute());
+    }
+
+    #[test]
+    fn configured_absolute_and_relative_paths_remain_explicit_preferences() {
+        let base = std::env::temp_dir().join("recording-config-test");
+        let mut config: RecordingConfig =
+            serde_yaml_ng::from_str("output_dir: ../custom-videos").unwrap();
+        config.resolve(&base);
+        assert_eq!(
+            config.output_directory().unwrap(),
+            base.join("../custom-videos")
+        );
+        let absolute = std::env::temp_dir().join("external-videos");
+        config.output_dir = Some(absolute.clone());
+        config.resolve(&base);
+        assert_eq!(config.output_directory().unwrap(), absolute);
+        config.output_dir = None;
+        config.resolve(&base);
+        assert!(!config.output_directory().unwrap().starts_with(base));
+    }
 }

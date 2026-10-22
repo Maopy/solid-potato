@@ -2,16 +2,17 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const integer=n=>{n=BigInt(n);const out=[];while(n>127n){out.push(Number(n&127n)|128);n>>=7n;}out.push(Number(n));return out;};
 const field=(k,v)=>typeof v==='number'||typeof v==='bigint'?[...integer(k*8),...integer(v)]:[...integer(k*8+2),...integer(v.length),...v];
 const pb=(...values)=>new Uint8Array(values.flat()),txt=s=>new TextEncoder().encode(s);
-function fixture({commonTime=0,eventTime=0,room=789}={}){
+function fixture({commonTime=0,eventTime=0,room=789,method='WebcastChatMessage',responseTime=0,action=1}={}){
  // Minimal native shape: Common fields 1/2/3, ChatMessage.event_time=15.
- const common=pb(field(1,txt('WebcastChatMessage')),field(2,7698237646736856074n),field(3,room),...(commonTime?[field(4,commonTime)]:[]));
- const body=pb(field(1,common),field(2,pb(field(1,12345),field(3,txt('观众')))),field(3,txt('手臂有胎记吗')),...(eventTime?[field(15,eventTime)]:[]));
- const message=pb(field(1,txt('WebcastChatMessage')),field(2,body),field(3,7698237666408353586n));
- return pb(field(6,txt('pb')),field(7,txt('msg')),field(8,pb(field(1,message))));
+ const common=pb(field(1,txt(method)),field(2,7698237646736856074n),field(3,room),...(commonTime?[field(4,commonTime)]:[]));
+ const body=pb(field(1,common),field(2,pb(field(1,12345),field(3,txt('观众')))),...(method==='WebcastMemberMessage'?[field(10,action)]:[field(3,txt('手臂有胎记吗'))]),...(eventTime?[field(15,eventTime)]:[]));
+ const message=pb(field(1,txt(method)),field(2,body),field(3,7698237666408353586n));
+ return pb(field(6,txt('pb')),field(7,txt('msg')),field(8,pb(field(1,message),...(responseTime?[field(4,responseTime)]:[]))));
 }
 async function decode(options){
- const events=[],now=1792385632605,context={Uint8Array,ArrayBuffer,TextDecoder,URL,Date:class extends Date{static now(){return now;}},BOOT:{rules_preview:true},document:{querySelectorAll:()=>[]},sdk:{setDecoderStatus(){},onDispose(){},emit:(type,source,payload,identity)=>events.push({type,source,payload,identity})}};
+ const events=[],now=1792385632605,context={location:{href:'https://live.douyin.com/123'},Uint8Array,ArrayBuffer,TextDecoder,URL,Date:class extends Date{static now(){return now;}},BOOT:{rules_preview:true,room_url:'https://live.douyin.com/123'},document:{querySelectorAll:()=>[]},sdk:{setDecoderStatus(){},onDispose(){},emit:(type,source,payload,identity)=>events.push({type,source,payload,identity})}};
  vm.createContext(context);vm.runInContext(fs.readFileSync('assets/moderation/adapters/douyin-decoder.js','utf8')+'\nglobalThis.decoder=douyinDecoder;',context);
+ context.decoder.bindRoom({data:{data:[{id_str:'789',owner:{id_str:'456'}}]}},'https://live.douyin.com/webcast/room/web/enter?web_rid=123');
  context.decoder.observe(fixture(options).buffer,'wss://webcast.example.douyin.com/webcast/im/push?room_id=789');
  await new Promise(r=>setImmediate(r));return events;
 }
@@ -36,4 +37,16 @@ test('missing time stays ineligible and valid Common time remains supported',asy
 test('event_time does not bypass room identity validation',async()=>{
  const events=await decode({eventTime:1792385631,room:456});assert.ok(!events.some(e=>e.type==='chat.received'));
  assert.ok(events.some(e=>e.type==='probe.gap'&&e.payload.reason==='message_room_mismatch'));
+});
+
+
+test('timestamp-less native arrivals use a fresh server response time in their verified room',async()=>{
+ const events=await decode({method:'WebcastMemberMessage',responseTime:1792385632748});
+ const arrival=events.find(e=>e.type==='member.entered');assert.equal(arrival.payload.live_eligible,true);assert.equal(arrival.payload.recipient_user_id,'456');
+});
+test('arrival fallback rejects old/future frames and non-entry actions, and cannot override explicit old Common time',async()=>{
+ for(const extra of [{responseTime:1792385531000},{responseTime:1792385731000},{responseTime:1792385632748,action:2},{responseTime:1792385632748,commonTime:1792385531}]){
+  const events=await decode({method:'WebcastMemberMessage',...extra});assert.ok(!events.some(e=>e.type==='member.entered'));
+ }
+ const missing=await decode({method:'WebcastMemberMessage'});assert.equal(missing.find(e=>e.type==='member.entered').payload.live_eligible,false);
 });

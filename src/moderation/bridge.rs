@@ -20,6 +20,7 @@ struct Ticket {
     deadline: Instant,
 }
 struct Session {
+    client_id: Option<String>,
     collecting: bool,
     timed: super::timed::TimedMessages,
     keywords: super::keywords::KeywordReplies,
@@ -50,6 +51,7 @@ pub struct ProbeBridge {
     automatic_send: bool,
     delivery: super::delivery::DeliveryConfig,
     timed_config: super::timed::TimedConfig,
+    likes_config: super::likes::LikeConfig,
     keyword_config: super::keywords::KeywordConfig,
     task_id: Option<String>,
     prefix: String,
@@ -102,6 +104,7 @@ impl ProbeBridge {
             automatic_send: false,
             delivery: Default::default(),
             timed_config: Default::default(),
+            likes_config: Default::default(),
             keyword_config: Default::default(),
             task_id: None,
             prefix: PREFIX.into(),
@@ -186,6 +189,40 @@ impl ProbeBridge {
                 .ok_or_else(|| anyhow::anyhow!("enabled boolean required"))?,
         )
     }
+    pub fn claim_like_period(&mut self, bearer: &str, scope: Poll) -> Result<Value> {
+        use chrono::Timelike;
+        if scope.v != VERSION || !self.scope.matches(&scope.page_url) {
+            bail!("invalid like scope");
+        }
+        self.authorize(bearer, &scope.connection_id, &scope.binding_id)?;
+        if self.draining
+            || self.scope.platform() != "douyin"
+            || !self.likes_config.enabled
+            || self.likes_config.mode != "clock"
+        {
+            bail!("clock likes unavailable");
+        }
+        let now = chrono::Local::now();
+        let start = now
+            .with_minute(
+                now.minute() / self.likes_config.every_minutes * self.likes_config.every_minutes,
+            )
+            .and_then(|n| n.with_second(0))
+            .and_then(|n| n.with_nanosecond(0))
+            .ok_or_else(|| anyhow::anyhow!("invalid local clock period"))?
+            .timestamp_millis();
+        let client = self.sessions[&scope.connection_id]
+            .client_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("stable tab client required"))?;
+        let key = format!("{}#{}", self.scope.room_url, client);
+        let claimed =
+            self.journal
+                .claim_like_period(&key, self.likes_config.every_minutes, start)?;
+        Ok(
+            json!({"claimed":claimed,"period_start_ms":start,"period_end_ms":start+self.likes_config.every_minutes as i64*60000,"batch_count":self.likes_config.batch_count}),
+        )
+    }
     pub fn request_recording(&mut self) -> Result<Value> {
         if !self.recording_ui || self.draining {
             bail!("recording unavailable");
@@ -218,6 +255,11 @@ impl ProbeBridge {
         Ok(())
     }
 
+    pub fn configure_likes(&mut self, config: super::likes::LikeConfig) -> Result<()> {
+        config.validate(self.scope.platform())?;
+        self.likes_config = config;
+        Ok(())
+    }
     pub fn configure_timed(&mut self, config: super::timed::TimedConfig) -> Result<()> {
         if !self.sessions.is_empty() || !self.tickets.is_empty() {
             bail!("configuration is immutable after bootstrap");
@@ -597,7 +639,7 @@ impl ProbeBridge {
                 deadline: Instant::now() + Duration::from_secs(60),
             },
         );
-        let config = json!({"v":VERSION,"task_id":self.task_id,"ticket":ticket,"room_url":self.scope.room_url.as_str(),"adapter_id":self.scope.adapter(),"prefix":self.prefix,"rules_preview":self.rules_preview,"fill_preview":self.fill_preview,"automatic_send":self.automatic_send,"raw_messages":self.raw_messages,"delivery_actor_user_id":self.delivery.actor_user_id,"keyword_replies":self.keyword_config,"timed_messages":{"enabled":self.timed_config.enabled,"min_comments":self.timed_config.min_comments},"moderation_enabled":self.moderation_enabled,"control_epoch":self.control_epoch,"recording":self.recording_ui,"unified_ui":self.unified_ui,"input_open_test":self.scope.platform()=="wechat_channels" && self.fill_test_text.is_some(),"wait_for_input":self.automatic_send || self.candidate_fill_only || (self.fill_preview && !self.rules_config.gift_show_quantity)});
+        let config = json!({"v":VERSION,"reload_handoff":true,"task_id":self.task_id,"ticket":ticket,"room_url":self.scope.room_url.as_str(),"adapter_id":self.scope.adapter(),"prefix":self.prefix,"rules_preview":self.rules_preview,"fill_preview":self.fill_preview,"automatic_send":self.automatic_send,"raw_messages":self.raw_messages,"delivery_actor_user_id":self.delivery.actor_user_id,"keyword_replies":self.keyword_config,"like_period_ledger":true,"likes":self.likes_config,"timed_messages":{"enabled":self.timed_config.enabled,"min_comments":self.timed_config.min_comments,"count_scope":self.timed_config.count_scope},"moderation_enabled":self.moderation_enabled,"control_epoch":self.control_epoch,"recording":self.recording_ui,"unified_ui":self.unified_ui,"input_open_test":self.scope.platform()=="wechat_channels" && self.fill_test_text.is_some(),"wait_for_input":self.automatic_send || self.candidate_fill_only || (self.fill_preview && !self.rules_config.gift_show_quantity)});
         Ok(config)
     }
 
@@ -640,12 +682,50 @@ impl ProbeBridge {
             || hello.adapter_id != self.scope.adapter()
             || !identifier(&hello.document_id, 128)
             || !self.scope.matches(&hello.page_url)
+            || hello
+                .client_id
+                .as_ref()
+                .is_some_and(|id| Uuid::parse_str(id).is_err())
         {
             bail!("hello scope or version mismatch");
         }
-        if !self.tickets.contains_key(&hello.ticket)
-            || self.sessions.len() >= 16
-            || (self.automatic_send && !self.sessions.is_empty())
+        if !self.tickets.contains_key(&hello.ticket) {
+            bail!("pairing denied");
+        }
+        // A scoped, single-use ticket may replace only this tab's previous
+        // document. Other tabs still cannot take over an automatic sender.
+        if self.automatic_send {
+            if let Some(client) = &hello.client_id {
+                let previous: Vec<_> = self
+                    .sessions
+                    .iter()
+                    .filter(|(_, s)| s.client_id.as_ref() == Some(client))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for connection in previous {
+                    self.cancel_candidate(&connection, "document_stopped")?;
+                    let now = self.now();
+                    let records = self
+                        .sessions
+                        .get_mut(&connection)
+                        .and_then(|s| s.fill.as_mut())
+                        .map(|fill| fill.cancel(now, "document_stopped"))
+                        .unwrap_or_default();
+                    if let Err(error) =
+                        self.journal
+                            .append_fill_audits(&self.run_id, &connection, &records)
+                    {
+                        self.storage_failed = true;
+                        return Err(error);
+                    }
+                    self.sessions.remove(&connection);
+                }
+            }
+        }
+        if self.sessions.len() >= 16
+            || (self.automatic_send
+                && self.scope.platform() == "douyin"
+                && !self.sessions.is_empty())
         {
             bail!("pairing denied");
         }
@@ -702,6 +782,7 @@ impl ProbeBridge {
         self.sessions.insert(
             connection.clone(),
             Session {
+                client_id: hello.client_id.clone(),
                 collecting: self.scope.platform() != "wechat_channels",
                 keywords: super::keywords::KeywordReplies::new(
                     self.keyword_config.clone(),
@@ -977,11 +1058,11 @@ impl ProbeBridge {
         let pending_interactions = session
             .preview
             .as_ref()
-            .is_some_and(|p| p.has_pending_work())
-            || session.candidate_preview.as_ref().is_some_and(|p| {
-                p.status(now)["pending_users"].as_u64().unwrap_or(0) > 0
-                    || p.status(now)["pending_welcome_users"].as_u64().unwrap_or(0) > 0
-            });
+            .is_some_and(|p| p.has_pending_dispatch())
+            || session
+                .candidate_preview
+                .as_ref()
+                .is_some_and(|p| p.status(now)["pending_users"].as_u64().unwrap_or(0) > 0);
         let timed_ready = !paused
             && account_ready
             && poll.input_ready == Some(true)

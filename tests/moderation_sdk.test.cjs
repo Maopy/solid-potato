@@ -148,3 +148,20 @@ test("current Douyin nickname markup produces a DOM observation without inventin
   assert.equal(updated[1].payload.content, "下一条评论");
   env.window.__liveArchiveModerationV1.dispose();
 });
+
+
+test('public screen counts new rows of every type once, baselines history, and ignores combo redraws',async()=>{
+ const env=environment();env.source=env.source.replace('ticket:"ticket"','ticket:"ticket",timed_messages:{enabled:true,min_comments:2,count_scope:"public_screen"}');
+ let observer;
+ const row=(id,text)=>{const r=new env.context.HTMLElement();r.textContent=text;r.getAttribute=()=>id;r.matches=()=>true;r.querySelector=()=>null;return r;};
+ const history=row('1','历史评论');
+ const root={querySelectorAll:()=>[history]};env.context.document.querySelector=()=>root;
+ env.context.MutationObserver=class{constructor(fn){observer=fn;}observe(){}disconnect(){}};
+ vm.runInContext(env.source,env.context);
+ const gift=row('2','观众送出鲜花 ×5'),own=row('3','场控自动文案'),system=row('4','系统提示');
+ observer([{addedNodes:[gift,own,system]}]);gift.textContent='观众送出鲜花 ×6';observer([{target:gift,addedNodes:[]}]);
+ observer([{addedNodes:[row('2','观众送出鲜花 ×6'),history]}]);await settle();
+ const events=env.requests.filter(r=>r.url.endsWith('events')).flatMap(r=>r.body.events).filter(e=>e.event_type==='public.activity');
+ assert.equal(events.length,3);assert.deepEqual(events.map(e=>e.native_event_id),['screen:2','screen:3','screen:4']);
+ env.window.__liveArchiveModerationV1.dispose();
+});

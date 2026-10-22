@@ -38,12 +38,12 @@ const makeGift = (msg, qty, end = false, options = {}) => {
 const memberOrUpgrade = (msg, upgrade) => {
   const method = upgrade ? 'WebcastFansclubMessage' : 'WebcastMemberMessage';
   const metadata = pb(field(4, BigInt(ANCHOR)));
-  const common = pb(field(1, text(method)), field(2, msg), field(3, BigInt(ROOM)), field(4, BigInt(Math.floor(Date.now()/1000))), field(16, metadata));
+  const common = pb(field(1, text(method)), field(2, msg), field(3, BigInt(ROOM)), ...(upgrade?[field(4, BigInt(Math.floor(Date.now()/1000)))]:[]), field(16, metadata));
   const club = pb(field(1, pb(field(2, 3), field(6, BigInt(ANCHOR)))));
   const who = pb(field(1, 9007199254740993555n), field(3, text('集成测试乙')), field(24, club));
   const body = upgrade ? pb(field(1, common), field(2, 1), field(4, who)) : pb(field(1, common), field(2, who), field(10, 1));
   const message = pb(field(1, text(method)), field(2, body), field(3, msg));
-  return pb(field(7, text('pb')), field(8, pb(field(1, message)))).buffer;
+  return pb(field(7, text('pb')), field(8, pb(field(1, message), field(4, Date.now())))).buffer;
 };
 const requests = [], consolePreviews = [], consoleWarnings = [], dispatchTimes = [], fillLogs = [];
 let deliverySocket;

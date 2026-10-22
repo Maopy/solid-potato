@@ -62,8 +62,12 @@ pub fn start(directory: &Path, port: u16, inspect_tls: bool) -> Result<Box<dyn P
             MacOsNetworkSetupProxyController, MacOsSecurityCertificateController,
             active_macos_network_service,
         };
+        let service = active_macos_network_service()?;
         (
-            MacOsNetworkSetupProxyController::new(active_macos_network_service()?),
+            super::proxy_watchdog::RecoveryController::new(
+                MacOsNetworkSetupProxyController::new(&service),
+                service,
+            ),
             MacOsSecurityCertificateController::new(certificate),
         )
     };

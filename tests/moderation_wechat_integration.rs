@@ -62,6 +62,7 @@ fn desktop_scope_adapter_and_config_gate_actions_before_startup() {
     )
     .unwrap();
     let hello = |adapter: &str| Hello {
+        client_id: None,
         v: VERSION,
         ticket: boot["ticket"].as_str().unwrap().into(),
         page_url: bridge.scope.room_url.to_string(),
@@ -503,4 +504,64 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
     assert!(entry_hint >= 2);
     let drained_events: i64 = connection.query_row("SELECT COUNT(*) FROM probe_events WHERE json_extract(event_json,'$.payload.stage')='drain_fixture'", [], |row| row.get(0)).unwrap();
     assert_eq!(drained_events, 125);
+}
+
+#[test]
+fn desktop_tabs_have_separate_bindings_and_refresh_replaces_only_the_same_tab() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let scope = ProbeScope::wechat_desktop(
+        "https://channels.weixin.qq.com/web/pages/live"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut b = ProbeBridge::new(
+        scope,
+        ProbeJournal::open(&dir.path().join("tabs.sqlite3")).unwrap(),
+    );
+    b.configure_candidate_preview(
+        live_archive_core::moderation::candidate_preview::CandidatePreviewConfig {
+            enabled: true,
+            recipient_user_id: Some("recipient".into()),
+        },
+    )
+    .unwrap();
+    b.enable_candidate_fill_preview(None).unwrap();
+    b.enable_automatic_send().unwrap();
+    b.set_moderation_enabled(false).unwrap();
+    let pair = |b: &mut ProbeBridge, client: &str, doc: &str| {
+        let boot = b.bootstrap_config(&b.relay_token.clone()).unwrap();
+        b.hello(Hello {
+            v: VERSION,
+            client_id: Some(client.into()),
+            ticket: boot["ticket"].as_str().unwrap().into(),
+            page_url: b.scope.room_url.to_string(),
+            document_id: doc.into(),
+            adapter_id: "wechat_channels.desktop_probe".into(),
+        })
+        .unwrap()
+    };
+    let a = pair(&mut b, "6647e65f-df75-4f4c-a565-e076490400ee", "tab-a");
+    let other = pair(&mut b, "b82a4cd3-8d3b-4112-9d79-7473ec9bc42e", "tab-b");
+    assert_eq!(b.summary()["active_connections"], 2);
+    let refreshed = pair(
+        &mut b,
+        "6647e65f-df75-4f4c-a565-e076490400ee",
+        "tab-a-reload",
+    );
+    assert_eq!(b.summary()["active_connections"], 2);
+    assert_ne!(a["binding_id"], refreshed["binding_id"]);
+    let poll = |v: &serde_json::Value| {
+        serde_json::from_value(json!({"v":VERSION,"page_url":"https://channels.weixin.qq.com/web/pages/live","connection_id":v["connection_id"],"binding_id":v["binding_id"]})).unwrap()
+    };
+    assert!(b.poll(a["token"].as_str().unwrap(), poll(&a)).is_err());
+    assert!(
+        b.poll(other["token"].as_str().unwrap(), poll(&other))
+            .is_ok()
+    );
+    assert!(
+        b.poll(refreshed["token"].as_str().unwrap(), poll(&refreshed))
+            .is_ok()
+    );
 }

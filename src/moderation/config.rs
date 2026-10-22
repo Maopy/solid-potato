@@ -40,6 +40,8 @@ pub struct ModerationConfig {
     #[serde(default)]
     pub timed_messages: super::timed::TimedConfig,
     #[serde(default)]
+    pub likes: super::likes::LikeConfig,
+    #[serde(default)]
     pub keyword_replies: super::keywords::KeywordConfig,
     #[serde(default)]
     pub recording: super::recording::RecordingConfig,
@@ -251,6 +253,7 @@ impl ModerationConfig {
         self.delivery.validate()?;
         self.recording.validate()?;
         self.timed_messages.validate(self.limits.max_text_chars)?;
+        self.likes.validate(&self.room.platform)?;
         self.keyword_replies.validate(self.limits.max_text_chars)?;
         if self.keyword_replies.enabled
             && (!self.sending.automatic
@@ -414,6 +417,7 @@ impl ModerationConfig {
             retention: self.storage.retention.clone(),
             delivery: self.delivery.clone(),
             timed_messages: self.timed_messages.clone(),
+            likes: self.likes.clone(),
             keyword_replies: self.keyword_replies.clone(),
             recording: self.recording.clone(),
             raw_messages: self.storage.raw_messages,

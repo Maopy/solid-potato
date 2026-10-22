@@ -59,3 +59,13 @@ timed_messages:
     - '新来的朋友欢迎呀，喜欢直播可以点个关注✨'
     - '精彩继续，喜欢就一起聊起来🎉'
     - '感谢大家的陪伴，欢迎常来玩💖'
+
+# 点赞独立开关；载入页面后仍需在面板手动开启。
+likes:
+  enabled: true
+  mode: clock
+  interval_ms: 800
+  every_minutes: 10
+  batch_count: 200
+  missed: catch_up_once
+  target_selector: null

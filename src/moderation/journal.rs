@@ -17,6 +17,10 @@ impl ProbeJournal {
             "PRAGMA journal_mode=WAL;
              PRAGMA max_page_count=2147483646;
              PRAGMA wal_autocheckpoint=100;
+             CREATE TABLE IF NOT EXISTS like_periods (
+                 room TEXT NOT NULL, every_minutes INTEGER NOT NULL, period_ms INTEGER NOT NULL,
+                 PRIMARY KEY(room,every_minutes,period_ms)
+             );
              CREATE TABLE IF NOT EXISTS raw_messages (
                  run_id TEXT NOT NULL, connection_id TEXT NOT NULL, seq INTEGER NOT NULL,
                  capture_id TEXT NOT NULL, captured_at_ms INTEGER NOT NULL,
@@ -56,6 +60,23 @@ impl ProbeJournal {
         )?;
         super::retention::initialize(&connection)?;
         Ok(Self { connection })
+    }
+
+    pub fn claim_like_period(
+        &mut self,
+        room: &str,
+        every_minutes: u32,
+        period_ms: i64,
+    ) -> Result<bool> {
+        let changed = self.connection.execute(
+            "INSERT OR IGNORE INTO like_periods(room,every_minutes,period_ms) VALUES(?1,?2,?3)",
+            params![room, every_minutes, period_ms],
+        )?;
+        self.connection.execute(
+            "DELETE FROM like_periods WHERE period_ms < ?1",
+            params![period_ms - 7 * 86400 * 1000],
+        )?;
+        Ok(changed == 1)
     }
 
     pub fn cleanup(

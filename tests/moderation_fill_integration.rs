@@ -21,6 +21,7 @@ fn pair(bridge: &mut ProbeBridge) -> Value {
     .unwrap();
     bridge
         .hello(Hello {
+            client_id: None,
             v: 1,
             ticket: config["ticket"].as_str().unwrap().into(),
             page_url: ROOM.into(),

@@ -306,8 +306,8 @@ impl OnlinePreview {
         let logs = self.engine.cancel_pending(now)?;
         Ok(self.collect(logs))
     }
-    pub fn has_pending_work(&self) -> bool {
-        self.engine.has_pending_work()
+    pub fn has_pending_dispatch(&self) -> bool {
+        self.engine.has_pending_dispatch()
     }
     pub fn status(&self) -> Value {
         json!({"mode":if self.scheduler.is_some() {"online_scheduler_preview"} else {"online_preview"},"scheduler":self.scheduler.as_ref().map(|s| s.status(&self.engine)),"send_chat":false,"actor_verified":false,"normalized_events":self.normalized,"planned":self.planned,"paused":self.paused,"last_reason":self.last_reason,"skipped_messages":self.skipped,"last_warning":self.last_warning,"preview_records_dropped":self.dropped,"recovery":"reload_new_document","completion":"preview_only_no_delivery_claim"})

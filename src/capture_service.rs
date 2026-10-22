@@ -297,7 +297,10 @@ impl CaptureIngestor {
                 if object.platform != "wxchannels" {
                     anyhow::bail!("only wxchannels live tasks are accepted");
                 }
-                let stream_url = find_string(&object.content.live, "liveCdnUrl")
+                let selected_stream =
+                    crate::moderation::recording_quality::wechat_stream(&object.content.live);
+                let stream_url = selected_stream
+                    .as_deref()
                     .context("live task does not include liveCdnUrl")?;
                 let stream_url = url::Url::parse(stream_url).context("invalid liveCdnUrl")?;
                 if !matches!(stream_url.scheme(), "http" | "https") {
@@ -343,6 +346,9 @@ impl CaptureIngestor {
             self.ingest_with_stream_policy(peer, bearer, event.clone(), true)?;
         }
         if let Some(bridge) = &self.task_bridge {
+            bridge
+                .register_recording(&id, platform, &event.page_url)
+                .await;
             // Publish before returning the create response. The unchanged
             // upstream SDK opens its task socket immediately after receiving
             // that response, so spawning this work caused an observable race.
@@ -615,7 +621,7 @@ async fn handle(
             .await;
         };
         if is_task_list {
-            let list = bridge.list().await;
+            let list = bridge.recording_list().await;
             return write_json_response(
                 &mut socket,
                 200,

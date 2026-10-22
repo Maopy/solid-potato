@@ -12,7 +12,7 @@ import tempfile
 RELEASE_NAME = re.compile(r'live-archive-moderation-(\d+)\.(\d+)\.(\d+)-macos-arm64')
 CONFIGS = ['douyin.yml', 'wechat.yml', 'wechat-observe.yml', 'douyin-auto.yml',
            'wechat-auto.yml', 'controller.yml', 'douyin-second.yml',
-           'gift-wording.example.yml', 'nickname-mapping.yml', 'timed-messages.example.yml', 'keyword-replies.example.yml', 'recording.example.yml', 'unified.yml']
+           'gift-wording.example.yml', 'nickname-mapping.yml', 'timed-messages.example.yml', 'keyword-replies.example.yml', 'recording.example.yml', 'likes.example.yml', 'unified.yml']
 SCRIPTS = ['run-douyin.sh', 'run-wechat.sh', 'run-douyin-auto.sh',
            'run-wechat-auto.sh', 'run-controller.sh', 'run.sh', '启动场控.command']
 
@@ -65,8 +65,35 @@ def migrate_unified(directory):
             stream.write("\n# 抖音用户脚本接入；视频号继续使用代理。\ndouyin_userscript:\n  enabled: true\n  port: 2025\n  key_file: ../../.live-archive-userscript-key\n")
 
 
+def migrate_recording(directory):
+    """Expose the external default without overwriting any recording preference."""
+    example = directory / 'recording.example.yml'
+    if example.exists():
+        text = example.read_text().replace('  # output_dir: ../data/recordings', '  # 默认系统下载文件夹/直播录屏；自定义请填写绝对路径。\n  # output_dir: /Volumes/Media/直播录屏')
+        example.write_text(text)
+    for name in ['unified.yml', 'controller.yml']:
+        path = directory / name
+        if path.exists() and not re.search(r'^recording\s*:', path.read_text(), re.M):
+            with path.open('a') as stream:
+                stream.write('\n# 录屏默认保存到系统下载文件夹/直播录屏；自定义请填写绝对路径。\nrecording:\n  output_dir: null\n')
+
+
+def migrate_likes(directory):
+    """Expose requested presets only when the room has no existing preference."""
+    for name, mode in [('douyin-auto.yml', 'clock'), ('wechat-auto.yml', 'continuous')]:
+        path = directory / name
+        if path.exists() and not re.search(r'^likes\s*:', path.read_text(), re.M):
+            with path.open('a') as stream:
+                stream.write('\n# 点赞独立于场控和录制；页面加载后默认关闭，在面板手动开启。\n'
+                             f'likes:\n  enabled: true\n  mode: {mode}\n  interval_ms: 800\n'
+                             '  every_minutes: 10\n  batch_count: 200\n'
+                             '  missed: catch_up_once\n  target_selector: null\n')
+
+
 def validate_configs(binary, directory):
     migrate_unified(directory)
+    migrate_recording(directory)
+    migrate_likes(directory)
     example = directory / 'timed-messages.example.yml'
     if example.exists():
         text = example.read_text()
@@ -109,7 +136,7 @@ def release_assets(repo, version):
                  'moderation-release-0.3.4.md', 'moderation-release-0.3.5.md',
                  'moderation-release-0.3.6.md', 'moderation-release-0.3.7.md',
                  'moderation-release-0.3.8.md', 'moderation-release-0.3.9.md', 'moderation-release-0.3.10.md', 'moderation-release-0.3.11.md', 'moderation-release-0.3.12.md', 'moderation-release-0.3.13.md', 'moderation-release-0.3.14.md', 'moderation-release-0.3.15.md', 'moderation-unified.md',
-                 'moderation-keywords.md', 'moderation-recording.md',
+                 'moderation-keywords.md', 'moderation-recording.md', 'moderation-likes.md',
                  f'moderation-release-{version}.md', 'moderation-next-version.md',
                  'moderation-welcome.md']:
         assets[f'docs/{name}'] = repo / 'docs' / name

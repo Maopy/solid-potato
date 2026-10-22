@@ -28,6 +28,7 @@ fn pair(bridge: &mut ProbeBridge) -> Value {
     let config: Value = serde_json::from_str(config).unwrap();
     bridge
         .hello(Hello {
+            client_id: None,
             v: VERSION,
             ticket: config["ticket"].as_str().unwrap().into(),
             page_url: bridge.scope.room_url.to_string(),
@@ -48,6 +49,20 @@ fn event(seq: u64) -> ProbeEvent {
         nickname: Some("观众".into()),
         payload: json!({"content":"你好","cookie":"must_not_persist"}),
     }
+}
+
+#[test]
+fn input_wait_diagnostics_preserve_reason_without_draft_contents() {
+    let mut status = event(1);
+    status.event_type = "probe.status".into();
+    status.source_kind = "diagnostic".into();
+    status.payload = json!({"stage":"input_wait_changed","reason":"input_busy","draft":"private unfinished comment"});
+    assert_eq!(
+        sanitize(&status).payload,
+        json!({"stage":"input_wait_changed","reason":"input_busy"})
+    );
+    status.payload["stage"] = json!("other_status");
+    assert_eq!(sanitize(&status).payload, json!({"stage":"other_status"}));
 }
 
 fn batch(session: &Value, first_seq: u64, events: Vec<ProbeEvent>) -> EventBatch {
@@ -107,6 +122,7 @@ fn pairing_ticket_is_single_use_and_probe_has_no_send_commands() {
     )
     .unwrap();
     let hello = || Hello {
+        client_id: None,
         v: 1,
         ticket: config["ticket"].as_str().unwrap().into(),
         page_url: "https://live.douyin.com/992927935592".into(),

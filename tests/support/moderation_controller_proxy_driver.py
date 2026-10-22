@@ -30,6 +30,10 @@ async def main():
             test=Path(__file__).with_name('moderation_task_picker_driver.cjs')
             out=subprocess.run(['node',str(test),str(script),host],capture_output=True,text=True)
             assert out.returncode==0,out.stderr
+            if host == 'channels.weixin.qq.com':
+                script.write_bytes(ns['loader']([r]))
+                out=subprocess.run(['node',str(test),str(script),host],capture_output=True,text=True)
+                assert out.returncode==0,out.stderr
     for r in routes:
         response=await call(r,'bootstrap.js',method='GET');assert response.status_code==200
         boot=json.loads(response.get_text().split('const BOOT = ')[1].split(';')[0]);assert boot['prefix']==r['prefix']

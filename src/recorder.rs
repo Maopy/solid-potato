@@ -76,18 +76,21 @@ impl FfmpegRecorder {
         mut stop: watch::Receiver<bool>,
     ) -> Result<PathBuf> {
         std::fs::create_dir_all(&task.output_dir).context("creating output directory")?;
+        // Shared anchor folders must not recover/remux another active writer's TS.
+        let guard = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(task.output_dir.join(".recording.lock"))?;
+        guard.try_lock().context("该主播目录已有录制正在运行")?;
+        let _guard = RecordingDirectoryGuard(guard);
         self.recover_interrupted_segments(&task.output_dir).await;
         // Keep TS while FFmpeg is writing: it is resilient to an interrupted
         // live edge. Completed segments are remuxed to MP4 below.
-        let segment_prefix = unique_segment_prefix(
-            &task.output_dir,
-            &safe_file_name(&format!(
-                "{}_{}",
-                task.display_name,
-                Local::now().format("%Y%m%d_%H%M%S"),
-            )),
-        )?;
-        let output = task.output_dir.join(format!("{segment_prefix}_%03d.ts"));
+        let segment_prefix = Local::now().format("%Y-%m-%d-%H-%M-%S").to_string();
+        let index = next_segment_index(&task.output_dir, &segment_prefix)?;
+        let output = task.output_dir.join(format!("{segment_prefix}-%03d.ts"));
         let mut child = Command::new(&self.config.ffmpeg_path)
             .args([
                 "-stdin",
@@ -101,6 +104,8 @@ impl FfmpegRecorder {
                 "-segment_time",
             ])
             .arg(self.config.segment_seconds.to_string())
+            .arg("-segment_start_number")
+            .arg(index.to_string())
             .arg(&output)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -265,8 +270,14 @@ fn completed_ts_segments(output_dir: &Path, segment_prefix: &str) -> Result<Vec<
         .filter(|path| {
             path.extension().is_some_and(|extension| extension == "ts")
                 && path.file_stem().is_some_and(|stem| {
-                    stem.to_string_lossy()
-                        .starts_with(&format!("{segment_prefix}_"))
+                    stem.to_string_lossy().starts_with(&format!(
+                        "{segment_prefix}{}",
+                        if is_new_timestamp(segment_prefix) {
+                            "-"
+                        } else {
+                            "_"
+                        }
+                    ))
                 })
         })
         .collect::<Vec<_>>();
@@ -274,36 +285,30 @@ fn completed_ts_segments(output_dir: &Path, segment_prefix: &str) -> Result<Vec<
     Ok(segments)
 }
 
-/// Keeps user-facing recording names readable while avoiding collisions when
-/// the same anchor starts more than one recording within a second.
-fn unique_segment_prefix(output_dir: &Path, base: &str) -> Result<String> {
-    for suffix in 0_u32.. {
-        let candidate = if suffix == 0 {
-            base.to_owned()
-        } else {
-            format!("{base}_{}", suffix + 1)
-        };
-        if !segment_prefix_in_use(output_dir, &candidate)? {
-            return Ok(candidate);
+// The directory lock makes this allocation exclusive across processes.
+fn next_segment_index(directory: &Path, prefix: &str) -> Result<u32> {
+    let mut next = 0;
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if let Some(tail) = name.strip_prefix(&format!("{prefix}-")) {
+            if let Some(index) = tail.split('.').next().and_then(|n| n.parse::<u32>().ok()) {
+                next = next.max(
+                    index
+                        .checked_add(1)
+                        .context("recording segment index exhausted")?,
+                );
+            }
         }
     }
-    unreachable!("unbounded u32 counter exhausted")
+    Ok(next)
 }
 
-fn segment_prefix_in_use(output_dir: &Path, prefix: &str) -> Result<bool> {
-    let prefix = format!("{prefix}_");
-    for entry in std::fs::read_dir(output_dir)
-        .with_context(|| format!("reading recording directory {}", output_dir.display()))?
-    {
-        let path = entry?.path();
-        if path
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
-        {
-            return Ok(true);
-        }
+struct RecordingDirectoryGuard(std::fs::File);
+impl Drop for RecordingDirectoryGuard {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
     }
-    Ok(false)
 }
 
 fn interrupted_segment_prefixes(output_dir: &Path) -> Vec<String> {
@@ -323,8 +328,8 @@ fn generated_segment_prefix(path: &Path) -> Option<String> {
         return None;
     }
     let stem = path.file_stem()?.to_str()?;
-    let (prefix, index) = stem.rsplit_once('_')?;
-    if index.len() != 3 || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+    let (prefix, index) = stem.rsplit_once('_').or_else(|| stem.rsplit_once('-'))?;
+    if index.len() < 3 || !index.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     if has_recording_timestamp(prefix) {
@@ -333,7 +338,14 @@ fn generated_segment_prefix(path: &Path) -> Option<String> {
     None
 }
 
+fn is_new_timestamp(prefix: &str) -> bool {
+    prefix.len() == 19 && chrono::NaiveDateTime::parse_from_str(prefix, "%Y-%m-%d-%H-%M-%S").is_ok()
+}
+
 fn has_recording_timestamp(prefix: &str) -> bool {
+    if is_new_timestamp(prefix) {
+        return true;
+    }
     let (before_time, time) = prefix.rsplit_once('_').unwrap_or(("", ""));
     if time.len() == 6 && time.bytes().all(|byte| byte.is_ascii_digit()) {
         let (name, date) = before_time.rsplit_once('_').unwrap_or(("", ""));
@@ -347,16 +359,29 @@ fn has_recording_timestamp(prefix: &str) -> bool {
         && has_recording_timestamp(without_sequence)
 }
 
-fn safe_file_name(name: &str) -> String {
-    name.chars()
+pub(crate) fn safe_file_name(name: &str) -> String {
+    let raw: String = name
+        .chars()
         .map(|ch| {
-            if matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            if ch.is_control() || matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+            {
                 '_'
             } else {
                 ch
             }
         })
-        .collect()
+        .take(80)
+        .collect();
+    let end = raw
+        .char_indices()
+        .find_map(|(i, _)| (i > 200).then_some(i))
+        .unwrap_or(raw.len());
+    let clean = raw[..end].trim_matches(|c: char| c == '.' || c.is_whitespace());
+    if clean.is_empty() {
+        "未命名主播".into()
+    } else {
+        clean.into()
+    }
 }
 
 #[cfg(test)]
@@ -488,16 +513,52 @@ mod tests {
     }
 
     #[test]
-    fn adds_a_sequence_only_when_a_readable_prefix_collides() {
+    fn directory_lease_prevents_recovery_of_another_active_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".recording.lock");
+        let first = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        first.try_lock().unwrap();
+        let guard = RecordingDirectoryGuard(first);
+        let second = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(second.try_lock().is_err());
+        drop(guard);
+        second.try_lock().unwrap();
+        let _guard = RecordingDirectoryGuard(second);
+    }
+
+    #[test]
+    fn same_second_recordings_continue_numbering_without_overwriting() {
         let directory = tempfile::tempdir().unwrap();
-        std::fs::write(
-            directory.path().join("主播_20260904_123456_000.mp4"),
-            b"test",
-        )
-        .unwrap();
+        for name in [
+            "2026-10-21-12-34-56-000.mp4",
+            "2026-10-21-12-34-56-001.ts",
+            "2026-10-21-12-34-56-002.partial.mp4",
+        ] {
+            std::fs::write(directory.path().join(name), b"existing").unwrap();
+        }
         assert_eq!(
-            unique_segment_prefix(directory.path(), "主播_20260904_123456").unwrap(),
-            "主播_20260904_123456_2"
+            next_segment_index(directory.path(), "2026-10-21-12-34-56").unwrap(),
+            3
+        );
+        assert_eq!(
+            generated_segment_prefix(Path::new("2026-10-21-12-34-56-1000.ts")),
+            Some("2026-10-21-12-34-56".into())
+        );
+        assert_eq!(
+            completed_ts_segments(directory.path(), "2026-10-21-12-34-56")
+                .unwrap()
+                .len(),
+            1
         );
     }
 }

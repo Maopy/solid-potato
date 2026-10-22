@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         直播助手 · 抖音统一场控
 // @namespace    live-archive.local
-// @version      0.3.23
+// @version      0.3.43
 // @description  抖音直播页连接本机场控，支持场控开关、互动与录制。
 // @match        https://live.douyin.com/*
 // @match        https://www.douyin.com/*
@@ -87,14 +87,14 @@ const earlyXhr=function(...args){
 XMLHttpRequest.prototype.open=earlyXhr;
 earlyXhrRestore=()=>{if(XMLHttpRequest.prototype.open===earlyXhr)XMLHttpRequest.prototype.open=earlyOpen;for(const fn of Array.from(earlyXhrListeners.values()))fn();};
 leaveRoom=()=>{window.__liveArchiveModerationV1?.dispose();cleanupEarly();delete window.__liveArchiveModerationV1;for(const id of ['live-archive-assistant','live-archive-recording'])document.getElementById(id)?.remove();};
-window.addEventListener('pagehide',cleanupEarly,{once:true});
+window.addEventListener('pagehide',()=>{window.__liveArchiveModerationV1?.dispose();cleanupEarly();},{once:true});
 const showConnecting=message=>{
   if(!document.body)return;
   let box=document.getElementById('live-archive-connecting');if(!box){box=document.createElement('div');box.id='live-archive-connecting';Object.assign(box.style,{position:'fixed',right:'20px',top:'16px',zIndex:2147483647,background:'#fff',color:'#222',padding:'12px',font:'14px sans-serif',border:'1px solid #ccc',borderRadius:'8px'});document.body.appendChild(box);}box.textContent=message;
 };
 document.addEventListener('DOMContentLoaded',()=>{if(!ready)showConnecting('直播助手 · 正在连接本机场控…');},{once:true});
 const request=payload=>new Promise((resolve,reject)=>{
-  if(!currentRoom()){reject(Error('直播间已切换，请刷新页面'));return;}
+  if(!currentRoom()&&payload.endpoint!=='goodbye'){reject(Error('直播间已切换，请刷新页面'));return;}
   GM_xmlhttpRequest({method:'POST',url:base+'/v1/userscript',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},data:JSON.stringify({room_url:roomUrl,...payload}),timeout:2500,anonymous:true,
     onload:r=>{try{const value=JSON.parse(r.responseText);if(r.status!==200){const e=Error(value.error||'本机场控连接失败');e.status=r.status;reject(e);}else resolve(value);}catch(e){reject(e);}},
     onerror:()=>reject(Error('无法连接本机场控，请先双击“启动场控”')),ontimeout:()=>reject(Error('本机场控连接超时'))});

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 fn hub(dir: &std::path::Path) -> UserscriptHub {
     let p = dir.join("dy.yml");
-    std::fs::write(&p,"version: 1\nmode: fill_only\nroom:\n  platform: douyin\n  adapter: douyin.live_page\n  url: https://live.douyin.com/111\nsending:\n  automatic: true\nkeyword_replies:\n  enabled: true\n  cooldown_seconds: 60\n  rules:\n    - keywords: ['胎记', '印记']\n      reply: 手臂是胎记\n").unwrap();
+    std::fs::write(&p,"version: 1\nmode: fill_only\nroom:\n  platform: douyin\n  adapter: douyin.live_page\n  url: https://live.douyin.com/111\nsending:\n  automatic: true\nkeyword_replies:\n  enabled: true\n  cooldown_seconds: 60\n  rules:\n    - keywords: ['胎记', '印记']\n      reply: 手臂是胎记\nlikes:\n  enabled: true\n  mode: clock\n  every_minutes: 10\n  batch_count: 200\n").unwrap();
     let c = ModerationConfig::load(&p).unwrap();
     let hub = UserscriptHub::new(dir.join("data"), true);
     hub.add_template(
@@ -24,6 +24,55 @@ fn connect(hub: &UserscriptHub, page: &str, boot: &Value) -> Value {
 }
 fn scope(page: &str, hello: &Value) -> Value {
     json!({"v":1,"connection_id":hello["connection_id"],"binding_id":hello["binding_id"],"page_url":page,"input_ready":true})
+}
+#[test]
+fn same_tab_refresh_replaces_old_binding_without_replaying_pending_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = hub(dir.path());
+    let page = "https://live.douyin.com/123";
+    let client = "6647e65f-df75-4f4c-a565-e076490400ee";
+    let pair = |boot: &Value, tab: &str, document: &str| {
+        hub.dispatch(page,"hello","",json!({"v":1,"ticket":boot["ticket"],"page_url":page,"document_id":document,"adapter_id":"douyin.live_page","client_id":tab}))
+    };
+    let boot = hub.bootstrap(page).unwrap();
+    assert_eq!(boot["reload_handoff"], true);
+    assert_eq!(boot["likes"]["enabled"], true);
+    assert_eq!(boot["likes"]["mode"], "clock");
+    assert_eq!(boot["likes"]["batch_count"], 200);
+    let old = pair(&boot, client, "old-document").unwrap();
+    hub.action("dy-123", Some(true)).unwrap();
+    hub.dispatch(page,"events",old["token"].as_str().unwrap(),json!({"v":1,"connection_id":old["connection_id"],"binding_id":old["binding_id"],"first_seq":1,"events":[{"seq":1,"event_id":"pending-keyword","event_type":"chat.received","source_kind":"network","user_id":"viewer","native_event_id":"pending-native","payload":{"content":"胎记","decoder":"douyin.pb.v1","live_eligible":true,"observed_at_ms":chrono::Utc::now().timestamp_millis()}}]})).unwrap();
+    let mut blocked = scope(page, &old);
+    blocked["input_ready"] = json!(false);
+    assert_eq!(
+        hub.dispatch(page, "poll", old["token"].as_str().unwrap(), blocked)
+            .unwrap()["fill"]["pending"],
+        1
+    );
+    assert!(pair(&boot, client, "replayed-ticket").is_err());
+    let other = hub.bootstrap(page).unwrap();
+    assert!(pair(&other, "b82a4cd3-8d3b-4112-9d79-7473ec9bc42e", "other-tab").is_err());
+    let refreshed = pair(&hub.bootstrap(page).unwrap(), client, "fresh-document").unwrap();
+    assert_ne!(old["connection_id"], refreshed["connection_id"]);
+    assert!(
+        hub.dispatch(
+            page,
+            "poll",
+            old["token"].as_str().unwrap(),
+            scope(page, &old)
+        )
+        .is_err()
+    );
+    let result = hub
+        .dispatch(
+            page,
+            "poll",
+            refreshed["token"].as_str().unwrap(),
+            scope(page, &refreshed),
+        )
+        .unwrap();
+    assert_eq!(result["commands"], json!([]));
+    assert_eq!(result["fill"]["pending"], 0);
 }
 #[tokio::test]
 async fn arbitrary_rooms_are_independent_default_off_and_bound_to_their_own_ticket() {
@@ -268,4 +317,78 @@ async fn unified_controller_proxies_only_wechat_and_dashboard_manages_dynamic_do
     .unwrap();
     dash.stop().await;
     controller.stop().await.unwrap();
+}
+
+#[test]
+fn like_claim_is_authenticated_persistent_and_independent_of_moderation_and_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let page = "https://live.douyin.com/123";
+    let client = "6647e65f-df75-4f4c-a565-e076490400ee";
+    let pair = |h: &UserscriptHub, document: &str| {
+        let boot = h.bootstrap(page).unwrap();
+        assert_eq!(boot["like_period_ledger"], true);
+        h.dispatch(page,"hello","",json!({"v":1,"ticket":boot["ticket"],"page_url":page,"document_id":document,"adapter_id":"douyin.live_page","client_id":client})).unwrap()
+    };
+    let h = hub(dir.path());
+    let hello = pair(&h, "initial");
+    h.room(page)
+        .unwrap()
+        .bridge
+        .lock()
+        .unwrap()
+        .configure_ui(false, true);
+    assert!(
+        h.dispatch(page, "likes/claim", "bad-token", scope(page, &hello))
+            .is_err()
+    );
+    let first = h
+        .dispatch(
+            page,
+            "likes/claim",
+            hello["token"].as_str().unwrap(),
+            scope(page, &hello),
+        )
+        .unwrap();
+    assert_eq!(first["claimed"], true);
+    assert_eq!(
+        first["period_end_ms"].as_i64().unwrap() - first["period_start_ms"].as_i64().unwrap(),
+        600000
+    );
+    let repeated = h
+        .dispatch(
+            page,
+            "likes/claim",
+            hello["token"].as_str().unwrap(),
+            scope(page, &hello),
+        )
+        .unwrap();
+    if first["period_start_ms"] == repeated["period_start_ms"] {
+        assert_eq!(repeated["claimed"], false);
+    }
+    let refreshed = pair(&h, "refreshed");
+    let again = h
+        .dispatch(
+            page,
+            "likes/claim",
+            refreshed["token"].as_str().unwrap(),
+            scope(page, &refreshed),
+        )
+        .unwrap();
+    if repeated["period_start_ms"] == again["period_start_ms"] {
+        assert_eq!(again["claimed"], false);
+    }
+    drop(h);
+    let restarted = hub(dir.path());
+    let hello = pair(&restarted, "restarted");
+    let last = restarted
+        .dispatch(
+            page,
+            "likes/claim",
+            hello["token"].as_str().unwrap(),
+            scope(page, &hello),
+        )
+        .unwrap();
+    if last["period_start_ms"] == again["period_start_ms"] {
+        assert_eq!(last["claimed"], false);
+    }
 }

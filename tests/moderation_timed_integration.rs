@@ -66,10 +66,18 @@ async fn setup(dir: &std::path::Path) -> (ProbeServer, Client) {
     setup_threshold(dir, 0).await
 }
 async fn setup_threshold(dir: &std::path::Path, min_comments: u64) -> (ProbeServer, Client) {
+    setup_scope(dir, min_comments, "comments").await
+}
+async fn setup_scope(
+    dir: &std::path::Path,
+    min_comments: u64,
+    scope: &str,
+) -> (ProbeServer, Client) {
     let path = dir.join("room.yml");
     std::fs::write(&path,"version: 1\nmode: candidate_fill_only\nroom:\n  platform: wechat_channels\n  adapter: wechat_channels.desktop_probe\n  url: https://channels.weixin.qq.com/web/pages/live\ncandidate_preview:\n  enabled: true\n  recipient_user_id: host\nsending:\n  automatic: true\ntimed_messages:\n  enabled: true\n  interval_seconds: 1\n  messages: ['定时甲', '定时乙']\nrules:\n  gift:\n    emojis: []\n").unwrap();
     let mut cfg = ModerationConfig::load(&path).unwrap();
     cfg.timed_messages.min_comments = min_comments;
+    cfg.timed_messages.count_scope = scope.into();
     let mut b = ProbeBridge::new(
         ProbeScope::from_room_url(cfg.room.url.clone()).unwrap(),
         ProbeJournal::open(&dir.join("journal.sqlite3")).unwrap(),
@@ -189,9 +197,73 @@ async fn comment_threshold_uses_fresh_nonkeyword_chat_and_both_gates() {
     assert_eq!(waiting["commands"], json!([]));
     assert_eq!(waiting["timed_messages"]["comments_since_last"], 1);
     c.events(vec![comment("two")]).await;
+    let busy = c.poll(false).await;
+    assert_eq!(busy["commands"], json!([]));
+    assert_eq!(busy["timed_messages"]["comments_since_last"], 2);
+    c.events(vec![comment("three")]).await;
+    let busy = c.poll(false).await;
+    assert_eq!(
+        busy["timed_messages"]["comments_since_last"], 3,
+        "the displayed count must not saturate at the threshold"
+    );
     let ready = c.poll(true).await;
     assert_eq!(ready["commands"].as_array().unwrap().len(), 1);
     assert_eq!(ready["timed_messages"]["comments_since_last"], 0);
+    assert_eq!(ready["timed_messages"]["counted_total"], 3);
+    assert_eq!(
+        ready["timed_messages"]["excluded"]["duplicate_or_capacity"],
+        1
+    );
+    assert_eq!(c.poll(true).await["commands"], json!([]));
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn public_message_scope_survives_sanitization_counts_automatic_text_and_resets_both_gates() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, mut c) = setup_scope(dir.path(), 2, "public_screen").await;
+    c.active(true).await;
+    let message = |id: &str, text: &str| json!({"event_type":"public.activity","source_kind":"network","native_event_id":id,"payload":{"decoder":"wechat.msg_list.public.v1","observed_at_ms":chrono::Utc::now().timestamp_millis(),"content":text,"message_type":10005}});
+    c.events(vec![
+        message("entry", "观众来了"),
+        message("own", "定时甲"),
+        message("own", "定时甲"),
+    ])
+    .await;
+    let waiting = c.poll(true).await;
+    assert_eq!(waiting["timed_messages"]["comments_since_last"], 2);
+    assert_eq!(waiting["commands"], json!([]));
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let ready = c.poll(true).await;
+    assert_eq!(ready["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(ready["timed_messages"]["comments_since_last"], 0);
+    assert_eq!(ready["timed_messages"]["count_scope"], "public_screen");
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn text_comments_do_not_send_on_arrivals_but_include_own_automatic_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, mut c) = setup_scope(dir.path(), 2, "text_comments").await;
+    c.active(true).await;
+    let notice = |id: &str| json!({"event_type":"public.activity","source_kind":"network","native_event_id":id,"payload":{"decoder":"wechat.msg_list.public.v1","observed_at_ms":chrono::Utc::now().timestamp_millis(),"message_type":10005}});
+    c.events((0..20).map(|i| notice(&format!("entry-{i}"))).collect())
+        .await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let empty = c.poll(true).await;
+    assert_eq!(empty["commands"], json!([]));
+    assert_eq!(empty["timed_messages"]["comments_since_last"], 0);
+    let text = |id: &str, content: &str| json!({"event_type":"chat.activity","source_kind":"network","user_id":"actor","native_event_id":id,"payload":{"content":content,"decoder":"wechat.msg_list.activity.v1","keyword_live":true,"message_type":1,"observed_at_ms":chrono::Utc::now().timestamp_millis()}});
+    c.events(vec![text("own", "定时甲")]).await;
+    assert_eq!(c.poll(true).await["commands"], json!([]));
+    c.events(vec![text("audience", "观众文字评论")]).await;
+    let ready = c.poll(true).await;
+    assert_eq!(ready["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(ready["timed_messages"]["counted_total"], 2);
+    c.receipt(&ready["commands"][0], false).await;
+    c.events((20..40).map(|i| notice(&format!("entry-{i}"))).collect())
+        .await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(c.poll(true).await["commands"], json!([]));
     server.stop().await.unwrap();
 }

@@ -1141,6 +1141,13 @@ impl Engine {
                     .is_some_and(|w| !w.users.is_empty())
         })
     }
+    /// A collecting welcome window has no command to send yet. It must not
+    /// indefinitely starve timed messages in rooms with continuous arrivals.
+    pub fn has_pending_dispatch(&self) -> bool {
+        self.rooms
+            .values()
+            .any(|r| !r.batches.is_empty() || !r.pending.is_empty())
+    }
     pub fn pending_action_ids(&self) -> Vec<String> {
         self.rooms
             .values()

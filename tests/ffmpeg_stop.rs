@@ -116,6 +116,7 @@ async fn stopping_real_ffmpeg_preserves_decodable_tail() {
     let mut files = std::fs::read_dir(&output_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
+        .filter(|path| path.file_name().is_none_or(|n| n != ".recording.lock"))
         .collect::<Vec<_>>();
     files.sort();
     assert!(files.len() >= 2);

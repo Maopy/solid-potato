@@ -467,6 +467,7 @@ PAGE_CAPTURE_SCRIPT = r'''/* live-archive-response-observer */
     window.WebSocket = ObservedWebSocket;
   }}
   const mountButton = () => {{
+    if (window.__liveArchiveModerationV1) return;
     if (document.getElementById("live-archive-download-button")) return;
     const button = document.createElement("button");
     button.id = "live-archive-download-button";

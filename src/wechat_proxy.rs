@@ -6,13 +6,13 @@
 use anyhow::{Context, Result, bail};
 use std::{path::PathBuf, process::Command, sync::Mutex};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProxyAddress {
     pub host: String,
     pub port: u16,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProxySnapshot {
     pub web: Option<ProxyAddress>,
     pub secure_web: Option<ProxyAddress>,

@@ -27,3 +27,7 @@ tasks:
     label: 视频号直播间
     account_id: wechat-main
     config: wechat-auto.yml
+
+# 录屏默认保存到系统下载文件夹/直播录屏，可改为自己的绝对路径。
+recording:
+  output_dir: null

@@ -4,6 +4,15 @@
 var ChannelsAPIOrigin = WXEnv.get("apiOrigin");
 
 (() => {
+  WXU.recording_live_data = function (live) {
+    try {
+      const api = WXU.API || {};
+      if (!api.finderJoinLiveMapper || !api.createAdapterFromGlobalMapper) return live;
+      const result = api.createAdapterFromGlobalMapper(live, api.finderJoinLiveMapper, ["room", "stream", "liveUser"], "poll");
+      const options = result?.[1]?.payload?.channelParams?.cdn_trans_info;
+      return Array.isArray(options) ? { ...live, recording_streams: options.slice(0, 64) } : live;
+    } catch (_) { return live; }
+  };
   function __wx_copy_live_download_command(url) {
     var filename = (() => {
       return new Date().valueOf();
@@ -178,7 +187,7 @@ var ChannelsAPIOrigin = WXEnv.get("apiOrigin");
         });
         return;
       }
-      var content = { profile: p, live: liveData };
+      var content = { profile: p, live: WXU.recording_live_data(liveData) };
       if (!dl$) {
         WXU.error({
           msg: "下载器未初始化",
@@ -243,6 +252,7 @@ var ChannelsAPIOrigin = WXEnv.get("apiOrigin");
     selector: ".host__info .extra",
     container: "#app",
     onOk: function ($elm) {
+      if (window.__liveArchiveModerationV1) return;
       if (__wx_live_download_btn) {
         return;
       }
@@ -251,6 +261,7 @@ var ChannelsAPIOrigin = WXEnv.get("apiOrigin");
         return;
       }
       var $btn = Icons.download_btn8();
+      $btn.id = "live-archive-wechat-record-icon";
       $elm.insertBefore($btn, relative_node);
       __wx_live_download_btn = $btn;
       __wx_setup_live_btn();

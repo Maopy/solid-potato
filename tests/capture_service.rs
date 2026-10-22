@@ -143,7 +143,7 @@ async fn reference_frontend_create_endpoint_publishes_a_live_capture() {
     // The upstream Channels frontend can expose its signed live CDN as HTTP.
     // That format is accepted only by this reference-task route; `/capture`
     // continues to require HTTPS.
-    let body = r#"{"objects":[{"platform":"wxchannels","content":{"profile":{"contact":{"username":"anchor","nickname":"主播"},"id":"object","objectNonceId":"nonce"},"live":{"liveSdkInfo":{"liveCdnUrl":"http://media.example.test/live.flv"}}}}]}"#;
+    let body = r#"{"objects":[{"platform":"wxchannels","content":{"profile":{"contact":{"username":"anchor","nickname":"主播"},"id":"object","objectNonceId":"nonce"},"live":{"liveSdkInfo":{"liveCdnUrl":"http://media.example.test/live.flv"},"recording_streams":[{"url":"http://media.example.test/origin.flv","tag_name":"原画","rate":4000},{"url":"https://media.example.test/hd.flv","tag_name":"高清","rate":1000}]}}}]}"#;
     let request = format!(
         "POST /api/v1/download_task/create?permit={} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{}",
         permit.as_bearer(),
@@ -158,6 +158,10 @@ async fn reference_frontend_create_endpoint_publishes_a_live_capture() {
     assert!(response.starts_with("HTTP/1.1 200"));
     assert!(response.contains("\"tasks\""));
     assert_eq!(captures.observed().len(), 1);
+    assert_eq!(
+        captures.observed()[0].stream_url.as_str(),
+        "http://media.example.test/origin.flv"
+    );
     assert_eq!(
         captures.observed()[0].anchor_username.as_deref(),
         Some("anchor")

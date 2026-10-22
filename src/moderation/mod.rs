@@ -14,10 +14,12 @@ pub mod http;
 pub mod inject;
 pub mod journal;
 pub mod keywords;
+pub mod likes;
 pub mod nicknames;
 pub mod online;
 pub mod protocol;
 pub mod recording;
+pub(crate) mod recording_quality;
 pub mod replay;
 pub mod retention;
 pub mod scheduler;
@@ -39,9 +41,16 @@ pub const WECHAT_FILL: &str = include_str!("../../assets/moderation/adapters/wec
 
 pub const AUTO_SEND: &str = include_str!("../../assets/moderation/sdk/submit.js");
 
-pub const PANEL: &str = include_str!("../../assets/moderation/sdk/panel.js");
+pub const PANEL: &str = concat!(
+    include_str!("../../assets/moderation/sdk/likes.js"),
+    "\n",
+    include_str!("../../assets/moderation/sdk/panel.js")
+);
 pub const DOUYIN_RECORDING: &str =
     include_str!("../../assets/moderation/adapters/douyin-recording.js");
 pub mod dashboard;
 
 pub mod userscript;
+
+pub mod proxy_watchdog;
+pub mod shutdown;

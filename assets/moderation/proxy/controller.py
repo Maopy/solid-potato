@@ -34,7 +34,7 @@ def loader(matches):
       const choices=CHOICES;
       const nonce=document.currentScript?.nonce||'';
       const load=choice=>{const s=document.createElement('script');s.src=choice.prefix+'bootstrap.js';if(nonce)s.nonce=nonce;document.head.appendChild(s);};
-      if(choices.length===1 && choices[0].host==='live.douyin.com'){load(choices[0]);return;}
+      if(choices.length===1){load(choices[0]);return;}
       const show=()=>{
         const box=document.createElement('div');box.id='live-archive-task-picker';
         Object.assign(box.style,{position:'fixed',top:'16px',right:'16px',zIndex:'2147483647',background:'#fff',color:'#111',padding:'16px',borderRadius:'8px',maxWidth:'360px',boxShadow:'0 2px 12px #555'});

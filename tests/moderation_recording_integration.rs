@@ -19,7 +19,8 @@ async fn shared_proxy_records_both_platforms_preserving_chat_and_task_controls()
         r#"#!/usr/bin/env python3
 import sys,pathlib
 args=sys.argv[1:]
-output=pathlib.Path(args[-1].replace('%03d','000'))
+index=int(args[args.index('-segment_start_number')+1]) if '-segment_start_number' in args else 0
+output=pathlib.Path(args[-1].replace('%03d',f'{index:03d}'))
 output.parent.mkdir(parents=True,exist_ok=True)
 if '-segment_time' in args:
     source=args[args.index('-i')+1]
@@ -61,6 +62,17 @@ else:
         .output()
         .await
         .unwrap();
+    let scoped = recording.tasks.recording_list().await;
+    assert!(
+        scoped
+            .iter()
+            .any(|t| t["platform"] == "douyin" && t["page_url"] == "https://live.douyin.com/123")
+    );
+    assert!(
+        scoped
+            .iter()
+            .all(|t| t["platform"].is_string() && t["page_url"].is_string())
+    );
     // Always shut down the worker before reporting assertion failures.
     tokio::time::timeout(Duration::from_secs(15), recording.stop())
         .await
@@ -74,6 +86,20 @@ else:
         String::from_utf8_lossy(&result.stderr)
     );
     for platform in ["douyin", "wechat_channels"] {
+        let anchor = if platform == "douyin" {
+            "抖音主播"
+        } else {
+            "视频号主播"
+        };
+        let folders: Vec<_> = std::fs::read_dir(output.join(platform))
+            .unwrap()
+            .map(|p| p.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            folders,
+            vec![std::ffi::OsString::from(anchor)],
+            "all sessions share the anchor folder"
+        );
         let files: Vec<_> = std::fs::read_dir(output.join(platform))
             .unwrap()
             .flat_map(|d| std::fs::read_dir(d.unwrap().path()).unwrap())
@@ -85,6 +111,18 @@ else:
                 .any(|f| f.extension().is_some_and(|e| e == "mp4")),
             "{platform}: {files:?}"
         );
+        let pattern =
+            regex::Regex::new(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-\d{3,}\.(mp4|ts)$").unwrap();
+        for file in files
+            .iter()
+            .filter(|p| p.file_name().is_none_or(|n| n != ".recording.lock"))
+        {
+            assert!(
+                pattern.is_match(&file.file_name().unwrap().to_string_lossy()),
+                "{}",
+                file.display()
+            );
+        }
         for file in files
             .iter()
             .filter(|f| f.extension().is_some_and(|e| e == "ts"))

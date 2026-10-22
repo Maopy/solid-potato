@@ -169,6 +169,7 @@ impl UserscriptHub {
         match endpoint {
             "hello" => b.hello(serde_json::from_value(body)?),
             "control" => b.control(bearer, body),
+            "likes/claim" => b.claim_like_period(bearer, serde_json::from_value(body)?),
             "events" => b.events(bearer, serde_json::from_value(body)?),
             "raw" => b.raw_messages(bearer, serde_json::from_value(body)?),
             "poll" => b.poll(bearer, serde_json::from_value(body)?),
@@ -219,6 +220,7 @@ fn configure_bridge(
     b.set_moderation_enabled(false)?;
     b.configure_delivery(o.delivery.clone())?;
     b.configure_timed(o.timed_messages.clone())?;
+    b.configure_likes(o.likes.clone())?;
     b.configure_keywords(o.keyword_replies.clone())?;
     b.configure_retention(o.retention.clone())?;
     b.maintain_journal(true)?;
@@ -363,7 +365,7 @@ async fn request(
     hub.authorize_recording(page, bearer, v["scope"].clone())?;
     let tasks = tasks.context("recording unavailable")?;
     match v["action"].as_str().context("recording action required")? {
-        "list" => Ok(json!({"list":tasks.list().await})),
+        "list" => Ok(json!({"list":tasks.recording_list().await})),
         "create" => {
             if tasks.list().await.len() >= 512 {
                 bail!("recording task limit reached");

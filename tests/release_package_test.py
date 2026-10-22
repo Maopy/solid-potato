@@ -22,6 +22,19 @@ class ReleaseConfigInheritance(unittest.TestCase):
             self.assertIsNone(package.previous_config(dist, '0.1.0'))
             self.assertIsNone(package.previous_config(dist / 'not-created-yet', '0.3.11'))
 
+    def test_recording_default_is_exposed_and_custom_paths_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            (config / 'unified.yml').write_text('version: 2\n')
+            custom = 'version: 2\nrecording:\n  output_dir: /external/videos\n  segment_seconds: 600\n'
+            (config / 'controller.yml').write_text(custom)
+            package.migrate_recording(config)
+            first = (config / 'unified.yml').read_text()
+            self.assertIn('output_dir: null', first)
+            self.assertEqual((config / 'controller.yml').read_text(), custom)
+            package.migrate_recording(config)
+            self.assertEqual((config / 'unified.yml').read_text(), first)
+
     def test_user_values_and_nested_files_are_inherited_and_new_files_are_retained(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -91,6 +104,23 @@ class ReleaseConfigInheritance(unittest.TestCase):
             path.write_text(original + '  min_comments: 7\n')
             package.validate_configs('/unused', directory)
             self.assertEqual(path.read_text(), original + '  min_comments: 7\n')
+
+    def test_likes_presets_are_independent_and_existing_preferences_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            dy = directory / 'douyin-auto.yml'
+            wx = directory / 'wechat-auto.yml'
+            dy.write_text('sending:\n  automatic: false\n')
+            custom = 'likes:\n  enabled: false\n  mode: continuous\n  interval_ms: 2000\n'
+            wx.write_text(custom)
+            package.migrate_likes(directory)
+            self.assertTrue(dy.read_text().startswith('sending:\n  automatic: false\n'))
+            self.assertIn('mode: clock', dy.read_text())
+            self.assertIn('batch_count: 200', dy.read_text())
+            self.assertEqual(wx.read_text(), custom)
+            once = dy.read_text()
+            package.migrate_likes(directory)
+            self.assertEqual(dy.read_text(), once)
 
     def test_archive_includes_inherited_custom_files_and_excludes_backups_and_data(self):
         with tempfile.TemporaryDirectory() as temporary:

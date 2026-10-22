@@ -229,7 +229,7 @@ const wxApplication = (channel, object) => {
     const contact=wxOwnValue(wxOwnValue(object,'from_user_contact'),'contact'),target=wxOwnValue(wxOwnValue(object,'to_user_contact'),'contact');
     const id=wxOwnValue(object,'client_msg_id'),user=wxOwnValue(contact,'username'),combo=wxOwnValue(value,'combo_id'),gift=wxOwnValue(value,'reward_gift');
     const summaryKey=JSON.stringify([user,id,combo]);
-    if(wxIdentifier(id)&&wxIdentifier(user,256)&&!wxSummarySeen.has(summaryKey)&&sdk.emit('gift.summary','network',{message_type:20013,combo_id:wxIdentifier(combo)&&combo!=='0'?combo:null,gift_id:wxOwnValue(value,'reward_product_id'),gift_name:sdk.clean(wxOwnValue(gift,'name'),64),recipient_user_id:wxOwnValue(target,'username'),decoder:'wechat.app20013.display.v1'}, {native_event_id:id,user_id:user})){wxSummarySeen.add(summaryKey);if(wxSummarySeen.size>2048)wxSummarySeen.delete(wxSummarySeen.values().next().value);}
+    if(wxIdentifier(id)&&wxIdentifier(user,256)&&!wxSummarySeen.has(summaryKey)&&sdk.emit('gift.summary','network',{message_type:20013,combo_id:wxIdentifier(combo)&&combo!=='0'?combo:null,gift_id:wxOwnValue(value,'reward_product_id'),gift_name:sdk.clean(wxOwnValue(gift,'name'),64),recipient_user_id:wxOwnValue(target,'username'),decoder:'wechat.app20013.display.v1'}, {native_event_id:id,user_id:user})){wxPublicActivity(id,20013);wxSummarySeen.add(summaryKey);if(wxSummarySeen.size>2048)wxSummarySeen.delete(wxSummarySeen.values().next().value);}
   }
   if(!value) sdk.emit('probe.gap','diagnostic',{reason:'gift_payload_unreadable'});
   const payload = { message_type: type, format, fields, envelope_fields: wxDetailFields(object),
@@ -603,6 +603,14 @@ const wxMessageSequence=value=>{
   return typeof value==='string'&&/^[1-9][0-9]{0,19}$/.test(value)?BigInt(value):null;
 };
 const wxActivitySeen=new Set();
+const wxPublicActivity=(id,type)=>{
+  if(!wxCollecting||BOOT.timed_messages?.count_scope!=='public_screen'||!BOOT.timed_messages?.enabled||!BOOT.timed_messages.min_comments)return;
+  const key='public:'+id;
+  if(wxActivitySeen.has(key)||sdk.getStatus().buffered>=499)return;
+  if(sdk.emit('public.activity','network',{decoder:'wechat.msg_list.public.v1',observed_at_ms:Date.now(),message_type:type},{native_event_id:id})){
+    wxActivitySeen.add(key);if(wxActivitySeen.size>16384)wxActivitySeen.delete(wxActivitySeen.values().next().value);
+  }
+};
 const wxKeywordSeen=new Set();
 const wxObserveKeywords=messages=>{
   const activity=BOOT.timed_messages?.enabled&&BOOT.timed_messages.min_comments>0;
@@ -618,11 +626,19 @@ const wxObserveKeywords=messages=>{
   if(Date.now()-wxKeywordWindow>=60000){wxKeywordWindow=Date.now();wxKeywordQuota=0;wxActivityQuota=0;}
   for(const entry of messages.slice(0,500)){
     const seq=wxMessageSequence(wxOwnValue(entry,'seq'));
-    if(seq===null||seq<=floor||wxOwnValue(entry,'type')!==1)continue;
+    if(seq===null||seq<=floor)continue;
+    if(activity&&BOOT.timed_messages?.count_scope==='public_screen'){
+      // msg_list is the native public message list. Count each new list entry
+      // regardless of type/content/author; the first poll is a baseline.
+      const rawId=wxOwnValue(entry,'client_msg_id');
+      const publicId=wxIdentifier(rawId)?rawId:'msg:'+seq.toString();
+      wxPublicActivity(publicId,wxOwnValue(entry,'type'));
+    }
+    if(wxOwnValue(entry,'type')!==1)continue;
     const id=wxOwnValue(entry,'client_msg_id'),user=wxOwnValue(entry,'username'),text=wxOwnValue(entry,'content');
     if(!wxIdentifier(id)||!wxIdentifier(user,256)||typeof text!=='string'||!text.trim()||Array.from(text).length>256||/[\u0000-\u001f\u007f-\u009f]/.test(text)||wxJsonObjectText(text))continue;
     const activityKey=JSON.stringify([user,id]);
-    if(activity&&!wxActivitySeen.has(activityKey)&&wxActivityQuota<600&&sdk.getStatus().buffered<499){
+    if(activity&&BOOT.timed_messages?.count_scope!=='public_screen'&&!wxActivitySeen.has(activityKey)&&wxActivityQuota<600&&sdk.getStatus().buffered<499){
       if(sdk.emit('chat.activity','network',{content:text,content_truncated:false,message_type:1,
         decoder:'wechat.msg_list.activity.v1',keyword_live:true,observed_at_ms:Date.now(),
         confidence:'candidate',live_eligible:false,room_verified:false},{native_event_id:id,user_id:user})){
@@ -909,12 +925,29 @@ const wxApiKind = args => {
   if (/cgi/.test(name)) return 'cgi';
   return 'other';
 };
+// Auto-binding can happen before the initial JoinLive response arrives.
+const createWechatRoomBinding=(readIdentity,onChange,autoBinding=false)=>{
+  let identity=readIdentity(),initialJoin=true;
+  const profile=()=>{const next=readIdentity();if(identity&&next&&identity!==next){onChange();return;}if(next)identity=next;};
+  return {profile,join:()=>{
+    const next=readIdentity();
+    if(initialJoin&&(identity===null||(autoBinding&&!identity))){initialJoin=false;if(next)identity=next;return;}
+    initialJoin=false;
+    if(identity&&next&&identity===next)return;
+    if(identity===null&&next){identity=next;return;}
+    onChange();
+  }};
+};
+const wxReadLiveIdentity=()=>{
+  const check=window.WXU?.check_live_existing;if(typeof check!=='function')return undefined;
+  try{const [error,p]=check({silence:true});if(error)return null;return p?.contact?.username||p?.username||p?.id||null;}catch(_){return null;}
+};
 const wxStopTaskForRoomChange = () => {
   if (!BOOT.task_id || sdk.getStatus().stopped) return;
   wxSetCollecting(false);
   sdk.emit('probe.status','diagnostic',{stage:'task_room_changed'});
   sdk.dispose();
-  if(document.body){const note=document.createElement('div');note.textContent='直播间发生切换，场控已停止。请重新打开直播页面，再选择任务。';Object.assign(note.style,{position:'fixed',top:'16px',right:'16px',zIndex:'2147483647',background:'#fff',color:'#111',padding:'16px'});document.body.appendChild(note);}
+  if(document.body){const note=document.createElement('div');note.textContent='直播间已切换，场控已停止。请刷新直播页面以重新连接。';Object.assign(note.style,{position:'fixed',top:'16px',right:'16px',zIndex:'2147483647',background:'#fff',color:'#111',padding:'16px'});document.body.appendChild(note);}
 };
 const wxNativeObserve = (values, category, apiKind = 'other') => {
   if (wxNativeDepth || !wxCollecting || sdk.getStatus().stopped) return;
@@ -1006,6 +1039,7 @@ sdk.onDispose(() => {
 });
 
 // Recording's existing WXE bus is optional; no recording controls are injected here.
+const wxRoomBinding=createWechatRoomBinding(wxReadLiveIdentity,wxStopTaskForRoomChange,BOOT.unified_ui===true);
 let wxBus = null; const wxBusListeners = [];
 const wxAttachBus = () => {
   wxStatus.hook_replaced = window.fetch !== wxFetchHook || window.WebSocket !== wxSocketHook || XMLHttpRequest.prototype.open !== wxOpenHook;
@@ -1016,7 +1050,7 @@ const wxAttachBus = () => {
   if (!bus || typeof bus.on !== 'function' || typeof bus.off !== 'function') return;
   wxBus = bus;
   for (const name of ['channels:OnLiveProfileLoaded', 'channels:JoinLive']) {
-    const handler = value => { try { if(name==='channels:JoinLive')wxStopTaskForRoomChange(); if (wxCollecting) sdk.captureRaw?.('event_bus','live_profile',value); wxShape('event_bus', value); } catch (_) {} };
+    const handler = value => { try { if(name==='channels:JoinLive')wxRoomBinding.join();else wxRoomBinding.profile(); if (wxCollecting) sdk.captureRaw?.('event_bus','live_profile',value); wxShape('event_bus', value); } catch (_) {} };
     bus.on(name, handler); wxBusListeners.push([name, handler]);
   }
   wxStatus.event_bus = true; wxPublish();
@@ -1030,8 +1064,10 @@ sdk.onDispose(() => {
 wxPublish();
 sdk.emit('probe.status', 'diagnostic', { stage: 'wechat_desktop_probe_ready' });
 
-// Same mounting approach as the injected recording button. No developer tools required.
+// Standalone probe diagnostics only; the unified assistant owns the live-page UI.
+sdk.onDispose(() => wxSetCollecting(false));
 const wxMountEntry = () => {
+  if (BOOT.unified_ui) return;
   if (sdk.getStatus().stopped || !document.body || document.getElementById('live-archive-moderation-entry')) return;
   const entry = document.createElement('button');
   entry.id = 'live-archive-moderation-entry'; entry.type = 'button'; entry.textContent = '场控诊断';

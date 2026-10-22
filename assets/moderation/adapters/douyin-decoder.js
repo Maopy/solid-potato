@@ -59,6 +59,7 @@ const douyinDecoder = (() => {
     try {
       const u = new URL(url, location.href);
       if (!u.pathname.includes("/webcast/room/web/enter") || u.searchParams.get("web_rid") !== new URL(BOOT.room_url).pathname.slice(1)) return;
+      sdk.observeRoomMetadata?.(value, url);
       const r = value?.data?.data?.[0], candidate = { room_id: decimal(r?.id_str), recipient_user_id: decimal(r?.owner?.id_str) };
       if (!candidate.room_id || !candidate.recipient_user_id) return;
       if (room && JSON.stringify(room) !== JSON.stringify(candidate)) { failure("room_identity_changed"); return; }
@@ -86,7 +87,7 @@ const douyinDecoder = (() => {
       if (pay > 0n && pay <= 100000n) sdk.emit("level.observed", "network", { ...context, level_kind: "pay_grade", level_name: "消费等级候选", new_level: Number(pay) }, identity);
     }
   };
-  const message = (bytes, socketRoom) => {
+  const message = (bytes, socketRoom, responseTime) => {
     const m = pb(bytes), method = text(m, 1, 96);
     if (!["WebcastGiftMessage", "WebcastChatMessage", "WebcastMemberMessage", "WebcastFansclubMessage", "WebcastControlMessage"].includes(method)) { stats.unsupported++; return; }
     if (!room) {
@@ -141,7 +142,11 @@ const douyinDecoder = (() => {
     } else if (method === "WebcastMemberMessage") {
       // action=1 is the entry candidate; other member/admin changes aren't welcomes.
       if (!recipient || number(body, 10) !== 1n) { stats.unsupported++; return; }
-      emit("member.entered", common, native, user(sub(body, 2)), { recipient_user_id: recipient, label: "native_entry" });
+      // Native member notifications omit Common.create_time and have no
+      // message-level timestamp. Use their WebSocket response's server time
+      // only for action=1 entries in this verified room. Buffered old frames
+      // still fail emit's age check; do not use local receipt time as proof.
+      emit("member.entered", common, native, user(sub(body, 2)), { recipient_user_id: recipient, label: "native_entry" }, responseTime);
     } else if (method === "WebcastFansclubMessage") {
       const who = user(sub(body, 4)), club = sub(sub(who.fields, 24), 1), anchor = id(club, 6), kind = number(body, 2);
       if (!recipient || anchor !== recipient || ![1n, 2n].includes(kind)) { stats.unsupported++; return; }
@@ -175,7 +180,7 @@ const douyinDecoder = (() => {
     if (messages.length > 500) throw Error("response_message_budget");
     // Unsupported gift semantics skip one message and continue this frame.
     // Corrupt transport still reports a gap and cancels incomplete windows.
-    for (const m of messages) message(m, socketRoom);
+    for (const m of messages) message(m, socketRoom, number(response, 4));
     status();
   };
   const observe = (data, url) => {

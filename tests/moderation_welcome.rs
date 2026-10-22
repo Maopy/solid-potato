@@ -68,6 +68,23 @@ fn thirty_second_window_is_fixed_and_duplicates_do_not_extend_it() {
 }
 
 #[test]
+fn collecting_welcomes_do_not_block_timed_messages_but_ready_actions_do() {
+    let mut engine = Engine::new(RulesConfig::default()).unwrap();
+    engine.ingest(0, arrival("first", "甲", "douyin")).unwrap();
+    assert!(engine.has_pending_work());
+    assert!(!engine.has_pending_dispatch());
+    engine
+        .ingest(29_999, arrival("second", "乙", "douyin"))
+        .unwrap();
+    assert!(!engine.has_pending_dispatch());
+    assert_eq!(
+        welcomed(&engine.advance(30_000).unwrap()),
+        ["欢迎甲、乙来到直播间"]
+    );
+    assert!(engine.has_pending_dispatch());
+}
+
+#[test]
 fn deadline_arrivals_join_batch_and_scopes_remain_independent() {
     let mut engine = Engine::new(RulesConfig::default()).unwrap();
     engine.ingest(0, arrival("a", "甲", "douyin")).unwrap();

@@ -1,0 +1,15 @@
+# 合并到房间配置（douyin-auto.yml / wechat-auto.yml）顶层。
+# enabled 仅控制是否提供功能，每次加载页面后仍需手动开启。
+likes:
+  enabled: true
+  # clock：自然整点批量点赞；continuous：持续点赞。
+  mode: clock
+  # 每次点赞操作的间隔，至少 100ms；抖音使用 Z 快捷键，视频号点击原生控件。
+  interval_ms: 800
+  # clock 专用：分钟周期必须整除 60，例如 5/10/15/20/30/60。
+  every_minutes: 10
+  batch_count: 200
+  # catch_up_once：后台恢复最多补一批；skip：错过后不补（允许 3 秒定时误差）。
+  missed: catch_up_once
+  # 可选 CSS 选择器；通常留空，通过面板“定位点赞按钮”选择。
+  target_selector: null

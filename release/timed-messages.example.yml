@@ -3,7 +3,9 @@
 timed_messages:
   enabled: true
   interval_seconds: 300
-  # 时间与评论条数同时达到才发；0 表示只按时间。仅统计采集开启后的新观众评论。
+  # 时间与消息条数同时达到才发；0 表示只按时间。
+  # text_comments 只计文字评论（包含场控文字），进场/礼物/系统提示不计数。
+  count_scope: text_comments
   min_comments: 5
   messages:
     - '新来的朋友欢迎呀，喜欢直播可以点个关注✨'

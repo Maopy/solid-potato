@@ -1,6 +1,6 @@
 [package]
 name = "live-archive-core"
-version = "0.3.23"
+version = "0.3.43"
 edition = "2024"
 license = "LicenseRef-MIT-Common-Clause"
 description = "Cross-platform live-stream recording core"

@@ -497,7 +497,13 @@ const context=vm.createContext({window:browser,location,XMLHttpRequest:Xhr,perfo
   const disposedSocket=new browser.WebSocket('wss://long.weixin.qq.com/synthetic-local-fixture');
   assert.equal(disposedSocket.listeners.size,0);
   assert.equal(listeners.size,0);assert.equal(socket.listeners.size,0);
-  assert.equal(document.body.children.length,0);
+  assert.equal(document.getElementById('live-archive-moderation-entry'),null);
+  assert.equal(document.getElementById('live-archive-moderation-panel'),null);
+  // The shared status panel deliberately remains visible after disconnect.
+  // Its actions must be disabled; the old collection UI and hooks are gone.
+  assert.ok(document.body.children.every(n=>n.id==='live-archive-assistant'),JSON.stringify(document.body.children.map(n=>n.id)));
+  const shared=document.getElementById('live-archive-assistant');
+  if(shared){const descendants=n=>[n,...n.children.flatMap(descendants)];const toggle=descendants(shared).find(n=>n.attributes.role==='switch');assert.equal(toggle.disabled,true);}
   const submittedSchemas=new Set(requests.flatMap(r=>r.events||[]).filter(e=>e.event_type==='probe.schema').map(e=>e.event_id)).size;
   assert.ok(submittedSchemas<=schemaCount);
   process.stdout.write(JSON.stringify({send_chat:false,schemas:submittedSchemas,observed_schemas:schemaCount,stopped:true})+'\n');
