@@ -136,7 +136,7 @@ def release_assets(repo, version):
                  'moderation-release-0.3.4.md', 'moderation-release-0.3.5.md',
                  'moderation-release-0.3.6.md', 'moderation-release-0.3.7.md',
                  'moderation-release-0.3.8.md', 'moderation-release-0.3.9.md', 'moderation-release-0.3.10.md', 'moderation-release-0.3.11.md', 'moderation-release-0.3.12.md', 'moderation-release-0.3.13.md', 'moderation-release-0.3.14.md', 'moderation-release-0.3.15.md', 'moderation-unified.md',
-                 'moderation-keywords.md', 'moderation-recording.md', 'moderation-likes.md',
+                 'moderation-keywords.md', 'moderation-recording.md', 'moderation-likes.md', 'asr-local-development.md',
                  f'moderation-release-{version}.md', 'moderation-next-version.md',
                  'moderation-welcome.md']:
         assets[f'docs/{name}'] = repo / 'docs' / name

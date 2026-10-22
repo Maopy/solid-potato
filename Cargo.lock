@@ -3376,7 +3376,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "live-archive-core"
-version = "0.3.43"
+version = "0.3.47"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3392,6 +3392,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

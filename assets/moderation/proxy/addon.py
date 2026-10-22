@@ -168,7 +168,7 @@ async def request(flow: http.HTTPFlow):
     if endpoint == "bootstrap.js" and flow.request.method == "GET":
         bridge_path, body = "/v1/bootstrap", b"{}"
         bearer, origin = CONFIG["relay_token"], ""
-    elif endpoint in ("control", "hello", "events", "raw", "poll", "results", "delivery", "goodbye") and flow.request.method == "POST":
+    elif endpoint in ("control", "speech", "hello", "events", "raw", "poll", "results", "delivery", "goodbye") and flow.request.method == "POST":
         if flow.request.headers.get("origin") != "https://" + CONFIG["host"]:
             return
         if flow.request.headers.get("content-type", "").split(";")[0] != "application/json":

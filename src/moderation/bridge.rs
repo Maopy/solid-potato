@@ -20,6 +20,7 @@ struct Ticket {
     deadline: Instant,
 }
 struct Session {
+    speech: super::speech::SpeechSession,
     client_id: Option<String>,
     collecting: bool,
     timed: super::timed::TimedMessages,
@@ -527,6 +528,9 @@ impl ProbeBridge {
     }
 
     pub fn begin_drain(&mut self) {
+        for session in self.sessions.values_mut() {
+            session.speech.stop();
+        }
         self.draining = true;
         self.tickets.clear();
         let connections: Vec<_> = self.sessions.keys().cloned().collect();
@@ -639,7 +643,7 @@ impl ProbeBridge {
                 deadline: Instant::now() + Duration::from_secs(60),
             },
         );
-        let config = json!({"v":VERSION,"reload_handoff":true,"task_id":self.task_id,"ticket":ticket,"room_url":self.scope.room_url.as_str(),"adapter_id":self.scope.adapter(),"prefix":self.prefix,"rules_preview":self.rules_preview,"fill_preview":self.fill_preview,"automatic_send":self.automatic_send,"raw_messages":self.raw_messages,"delivery_actor_user_id":self.delivery.actor_user_id,"keyword_replies":self.keyword_config,"like_period_ledger":true,"likes":self.likes_config,"timed_messages":{"enabled":self.timed_config.enabled,"min_comments":self.timed_config.min_comments,"count_scope":self.timed_config.count_scope},"moderation_enabled":self.moderation_enabled,"control_epoch":self.control_epoch,"recording":self.recording_ui,"unified_ui":self.unified_ui,"input_open_test":self.scope.platform()=="wechat_channels" && self.fill_test_text.is_some(),"wait_for_input":self.automatic_send || self.candidate_fill_only || (self.fill_preview && !self.rules_config.gift_show_quantity)});
+        let config = json!({"v":VERSION,"reload_handoff":true,"task_id":self.task_id,"ticket":ticket,"room_url":self.scope.room_url.as_str(),"adapter_id":self.scope.adapter(),"prefix":self.prefix,"rules_preview":self.rules_preview,"fill_preview":self.fill_preview,"automatic_send":self.automatic_send,"raw_messages":self.raw_messages,"delivery_actor_user_id":self.delivery.actor_user_id,"keyword_replies":self.keyword_config,"speech_recognition":self.unified_ui,"like_period_ledger":true,"likes":self.likes_config,"timed_messages":{"enabled":self.timed_config.enabled,"min_comments":self.timed_config.min_comments,"count_scope":self.timed_config.count_scope},"moderation_enabled":self.moderation_enabled,"control_epoch":self.control_epoch,"recording":self.recording_ui,"unified_ui":self.unified_ui,"input_open_test":self.scope.platform()=="wechat_channels" && self.fill_test_text.is_some(),"wait_for_input":self.automatic_send || self.candidate_fill_only || (self.fill_preview && !self.rules_config.gift_show_quantity)});
         Ok(config)
     }
 
@@ -651,7 +655,7 @@ impl ProbeBridge {
             ));
         }
         Ok(format!(
-            "(() => {{ const BOOT = {config};\n{SDK}\n{RAW_CAPTURE}\n{AUTO_SEND}\n{DOUYIN_DECODER}\n{DOUYIN_ADAPTER}\n{DOUYIN_FILL}\nif(BOOT.recording){{{DOUYIN_RECORDING}}}\n{PANEL}\n}})();"
+            "(() => {{ const BOOT = {config};\n{SDK}\n{RAW_CAPTURE}\n{AUTO_SEND}\n{DOUYIN_DECODER}\n{DOUYIN_ADAPTER}\n{DOUYIN_FILL}\nif(BOOT.recording||BOOT.speech_recognition){{{DOUYIN_RECORDING}}}\n{PANEL}\n}})();"
         ))
     }
 
@@ -782,6 +786,7 @@ impl ProbeBridge {
         self.sessions.insert(
             connection.clone(),
             Session {
+                speech: Default::default(),
                 client_id: hello.client_id.clone(),
                 collecting: self.scope.platform() != "wechat_channels",
                 keywords: super::keywords::KeywordReplies::new(
@@ -815,6 +820,33 @@ impl ProbeBridge {
         Ok(
             json!({"v":VERSION,"mode":if self.automatic_send {"fill_and_send"} else if self.fill_preview {"fill_only"} else {"observe"},"connection_id":connection,"binding_id":binding,"token":session_token,"room_key":self.scope.room_key,"actor_verified":false,"send_chat":self.automatic_send,"acked_seq":0}),
         )
+    }
+
+    pub fn speech(&mut self, bearer: &str, body: Value) -> Result<Value> {
+        let scope: Poll = serde_json::from_value(body["scope"].clone())?;
+        if self.draining
+            || !self.unified_ui
+            || scope.v != VERSION
+            || !self.scope.matches(&scope.page_url)
+        {
+            bail!("speech scope unavailable");
+        }
+        self.authorize(bearer, &scope.connection_id, &scope.binding_id)?;
+        let session = self
+            .sessions
+            .get_mut(&scope.connection_id)
+            .expect("authorized");
+        match body["action"].as_str().unwrap_or("status") {
+            "start" => session.speech.start(
+                body["stream_url"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("直播音频尚未就绪"))?,
+            )?,
+            "stop" => session.speech.stop(),
+            "status" => {}
+            _ => bail!("invalid speech action"),
+        }
+        Ok(serde_json::to_value(session.speech.status())?)
     }
 
     pub fn authorize_scope(&mut self, bearer: &str, scope: Poll) -> Result<()> {

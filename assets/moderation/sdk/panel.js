@@ -2,18 +2,30 @@
 const mountModerationPanel=()=>{
   if(!document.body||typeof document.createElement!=='function'||typeof document.getElementById!=='function'||document.getElementById('live-archive-assistant'))return;
   const box=document.createElement('section');box.id='live-archive-assistant';
-  Object.assign(box.style,{position:'fixed',right:'20px',top:'16px',zIndex:'2147483647',background:'#fff',color:'#222',padding:'12px',border:'1px solid #ccc',borderRadius:'8px',font:'14px sans-serif',maxWidth:'320px',boxShadow:'0 2px 10px #888'});
+  Object.assign(box.style,{position:'fixed',right:'20px',top:'16px',zIndex:'2147483647',background:'#20232b',color:'#e5e7eb',padding:'12px',border:'1px solid #3b4250',borderRadius:'8px',font:'14px sans-serif',maxWidth:'320px',boxShadow:'0 8px 28px #0006'});
   const platform=BOOT.adapter_id==='wechat_channels.desktop_probe'?'视频号':'抖音';
   let expanded=false;
   const launcher=document.createElement('button');
   const recordingDot=document.createElement('span'),launcherLabel=document.createElement('span');
-  recordingDot.setAttribute('aria-hidden','true');Object.assign(recordingDot.style,{display:BOOT.recording?'inline-block':'none',width:'9px',height:'9px',borderRadius:'50%',background:'#9ca3af',marginRight:'7px'});
-  launcher.appendChild(recordingDot);launcher.appendChild(launcherLabel);launcher.type='button';launcher.setAttribute('aria-controls','live-archive-assistant-details');
-  Object.assign(launcher.style,{background:'#0f766e',color:'#fff',border:'0',borderRadius:'18px',padding:'9px 13px',cursor:'pointer',font:'13px sans-serif',minHeight:'36px'});
+  const collapsedModeration=document.createElement('span'),platformIcon=document.createElement('span');
+  collapsedModeration.id='live-archive-collapsed-moderation';collapsedModeration.setAttribute('aria-hidden','true');
+  Object.assign(collapsedModeration.style,{display:'inline-flex',width:'9px',height:'9px',borderRadius:'50%',background:'#9ca3af',order:'0'});
+  platformIcon.id='live-archive-platform';platformIcon.title=platform;platformIcon.setAttribute('aria-hidden','true');
+  platformIcon.innerHTML=platform==='抖音'?'<svg width="16" height="16" viewBox="0 0 24 24"><path fill="#9ca3af" d="M17 3v13a5 5 0 1 1-4-4.9v3.4a2 2 0 1 0 1 1.7V3Zm0 0c.4 3 2 4.6 5 5v3c-2-.2-3.5-.9-5-2Z"/></svg>':'<svg width="18" height="16" viewBox="0 0 26 24" fill="none" stroke="#9ca3af" stroke-width="3.2" stroke-linecap="round"><path d="M12 10C7-1 0 4 3 12c3 8 12 6 10-1 2-9 13-6 10 2-2 7-11 4-12-1Z"/></svg>';
+  Object.assign(platformIcon.style,{display:'none',alignItems:'center',justifyContent:'center',width:'18px',height:'18px',lineHeight:'0',flexShrink:'0',order:'2'});
+  launcherLabel.setAttribute('aria-hidden','true');Object.assign(launcherLabel.style,{display:'inline-flex',alignItems:'center',justifyContent:'center',width:'18px',height:'18px',lineHeight:'0',flexShrink:'0',order:'3'});
+
+  recordingDot.setAttribute('aria-hidden','true');Object.assign(recordingDot.style,{display:BOOT.recording?'inline-block':'none',width:'9px',height:'9px',borderRadius:'50%',background:'#9ca3af',marginRight:'0',order:'1'});
+  launcher.appendChild(recordingDot);launcher.appendChild(collapsedModeration);launcher.appendChild(platformIcon);launcher.appendChild(launcherLabel);launcher.type='button';launcher.setAttribute('aria-controls','live-archive-assistant-details');
+  Object.assign(launcher.style,{background:'#303642',color:'#e5e7eb',border:'0',borderRadius:'18px',padding:'9px 13px',cursor:'pointer',font:'13px sans-serif',minHeight:'32px',display:'inline-flex',alignItems:'center',gap:'8px'});
   const details=document.createElement('div');details.id='live-archive-assistant-details';
   launcher.onclick=()=>{expanded=!expanded;render();};
   const toggle=document.createElement('button');toggle.type='button';toggle.setAttribute('role','switch');
-  const info=document.createElement('div');info.style.whiteSpace='pre-line';
+  toggle.id='live-archive-moderation-toggle';
+  const toggleDot=document.createElement('span'),toggleLabel=document.createElement('span');
+  toggleDot.setAttribute('aria-hidden','true');Object.assign(toggleDot.style,{display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',background:'#9ca3af',marginRight:'5px'});
+  toggleLabel.textContent='场控';toggle.appendChild(toggleDot);toggle.appendChild(toggleLabel);
+  const info=document.createElement('div');Object.assign(info.style,{whiteSpace:'pre-line',color:'#aeb6c6',font:'13px/1.6 sans-serif'});
   const record=document.createElement('button');record.type='button';record.id='live-archive-record-toggle';record.hidden=!BOOT.recording;
   const recordDot=document.createElement('span'),recordLabel=document.createElement('span');
   recordDot.setAttribute('aria-hidden','true');Object.assign(recordDot.style,{display:'inline-block',width:'9px',height:'9px',borderRadius:'50%',background:'#9ca3af',marginRight:'7px'});
@@ -26,26 +38,53 @@ const mountModerationPanel=()=>{
   likeDot.setAttribute('aria-hidden','true');Object.assign(likeDot.style,{display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',background:'#9ca3af',marginRight:'5px'});
   likeLabel.textContent='点赞';
   like.appendChild(likeDot);like.appendChild(likeLabel);likesGroup.appendChild(like);
-  for(const button of [toggle,record,like])Object.assign(button.style,{background:'#0f766e',color:'#fff',border:'0',borderRadius:'5px',padding:'7px 10px',margin:'0',cursor:'pointer',font:'14px sans-serif',lineHeight:'18px',height:'32px',boxSizing:'border-box',display:'inline-flex',alignItems:'center',justifyContent:'center',flexShrink:'0'});
-  const notice=document.createElement('div');
+  const speech=document.createElement('button');speech.type='button';speech.id='live-archive-speech-toggle';speech.setAttribute('role','switch');
+  const speechDot=document.createElement('span'),speechLabel=document.createElement('span');
+  speechDot.setAttribute('aria-hidden','true');Object.assign(speechDot.style,{display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',background:'#9ca3af',marginRight:'5px'});
+  speechLabel.textContent='语音';speech.appendChild(speechDot);speech.appendChild(speechLabel);
+  speech.hidden=!BOOT.speech_recognition;
+  const transcript=document.createElement('div');transcript.id='live-archive-speech-recent';
+  Object.assign(transcript.style,{whiteSpace:'pre-line',font:'13px/1.6 sans-serif',maxWidth:'320px',overflowWrap:'anywhere',marginTop:'8px',padding:'8px',background:'#171a21',color:'#e5e7eb',border:'1px solid #343b48',borderRadius:'5px'});
+  transcript.hidden=!BOOT.speech_recognition;
+  let speechBusy=false;
+  speech.onclick=async()=>{speechBusy=true;render();try{await sdk.setSpeechEnabled(!sdk.getSpeechStatus().enabled);notice.textContent='';}catch(e){notice.textContent=e.message;}finally{speechBusy=false;render();}};
+  for(const button of [toggle,record,like,speech])Object.assign(button.style,{background:'#303642',color:'#e5e7eb',border:'1px solid #424b5b',borderRadius:'5px',padding:'6px 7px',margin:'0',cursor:'pointer',font:'14px sans-serif',lineHeight:'18px',height:'32px',boxSizing:'border-box',display:'inline-flex',alignItems:'center',justifyContent:'center',flexShrink:'0'});
+  const notice=document.createElement('div');notice.style.color='#fda4af';
   toggle.onclick=async()=>{toggle.disabled=true;try{await sdk.setModerationEnabled(!sdk.getStatus().moderation_enabled);notice.textContent='';}catch(e){notice.textContent=e.message;}finally{render();}};
   record.onclick=async()=>{record.disabled=true;try{const state=sdk.getRecordingStatus().state;if(state==='recording')await sdk.pauseRecording();else if(state==='paused')await sdk.resumeRecording();else await sdk.startRecording();notice.textContent='';}catch(e){notice.textContent=e.message;}finally{render();}};
   like.onclick=()=>{try{sdk.likes?.setEnabled(!sdk.likes.getStatus().enabled);notice.textContent='';}catch(e){notice.textContent=e.message;}render();};
   const render=()=>{const s=sdk.getStatus();
     const state=s.stopped||s.bridge_error||s.decoder?.last_error?'异常':!s.connected?'连接中':s.moderation_enabled?'已开启':'已关闭';
-    launcherLabel.textContent=expanded?'直播助手 · '+platform+'　收起 ▴':'场控 · '+state+' ▾';
+    const panelIcon='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h8'+(expanded?'':'M12 11v6')+'"/></svg>';
+    if(launcherLabel.innerHTML!==panelIcon)launcherLabel.innerHTML=panelIcon;
+    collapsedModeration.style.display=expanded?'none':'inline-flex';
+    collapsedModeration.style.background=s.moderation_enabled&&!s.stopped&&!s.bridge_error?'#4ade80':'#9ca3af';
+    collapsedModeration.title='场控'+state;
+    platformIcon.style.display=expanded?'inline-flex':'none';
+    Object.assign(launcher.style,{position:expanded?'absolute':'static',right:expanded?'8px':'auto',top:expanded?'12px':'auto',background:expanded?'transparent':'#20232b',color:'#aeb6c6',padding:expanded?'4px':'8px 10px',gap:expanded?'4px':'8px',borderRadius:expanded?'5px':'18px'});
     launcher.title=(expanded?'收起':'展开')+'直播助手 · '+platform+'（场控'+state+'）';
-    launcher.setAttribute('aria-expanded',String(expanded));
+    launcher.setAttribute('aria-label',launcher.title);launcher.setAttribute('aria-expanded',String(expanded));
     details.hidden=!expanded;details.style.display=expanded?'block':'none';
-    Object.assign(box.style,{padding:expanded?'12px':'0',background:expanded?'#fff':'transparent',border:expanded?'1px solid #ccc':'0',boxShadow:expanded?'0 2px 10px #888':'none',maxWidth:'calc(100vw - 40px)',maxHeight:'calc(100vh - 32px)',overflowY:'auto'});
-    toggle.textContent=s.moderation_enabled?'关闭场控':'开启场控';toggle.setAttribute('aria-checked',String(s.moderation_enabled));toggle.disabled=!s.connected||s.stopped||s.draining;
-    info.textContent=(s.stopped?'连接已停止，请刷新直播页':s.connected?'已连接':'未连接')+' · 场控'+(s.moderation_enabled?'已开启':'已关闭')+(s.bridge_error?'\n'+s.bridge_error:'')+(s.fill?.bridge?.blocked?'\n发送未确认，已暂停后续发送':'');
+    Object.assign(box.style,{padding:expanded?'12px':'0',background:expanded?'#20232b':'transparent',border:expanded?'1px solid #3b4250':'0',boxShadow:expanded?'0 8px 28px #0006':'none',maxWidth:'calc(100vw - 40px)',maxHeight:'calc(100vh - 32px)',overflowY:'auto',width:expanded?'320px':'auto',boxSizing:'border-box',colorScheme:'dark'});
+    toggleDot.style.background=s.moderation_enabled?'#4ade80':'#9ca3af';
+    toggle.title=s.moderation_enabled?'场控已开启，点击关闭':'场控已关闭，点击开启';toggle.setAttribute('aria-label',toggle.title);
+    toggle.setAttribute('aria-checked',String(s.moderation_enabled));toggle.disabled=!s.connected||s.stopped||s.draining;
+    info.textContent=[s.stopped?'连接已停止，请刷新直播页':!s.connected?'正在连接直播页':'',s.bridge_error||'',s.fill?.bridge?.blocked?'发送未确认，已暂停后续发送':''].filter(Boolean).join('\n');
     if(BOOT.adapter_id==='douyin.live_page'){
       const counts=s.delivery?.observed||s.delivery?.generated||{},comments=counts['chat.received']||0,gifts=counts['gift.observed']||0;
       info.textContent+='\n已采集：评论 '+comments+' · 礼物 '+gifts;
       if(s.decoder?.last_error)info.textContent+='\n消息解析异常：'+s.decoder.last_error;
       const reason=s.fill?.input_reason,names={page_hidden:'直播页在后台',input_not_found:'未找到评论输入框',input_not_unique:'发现多个评论输入框',input_busy:'评论框正在编辑',input_disabled:'评论框不可用',input_hidden:'评论框不可见'};
       if(reason)info.textContent+='\n'+(names[reason]||reason);
+    }
+    if(BOOT.speech_recognition&&sdk.getSpeechStatus){
+      const voice=sdk.getSpeechStatus();
+      speechDot.style.background=voice.enabled?'#4ade80':'#9ca3af';speech.setAttribute('aria-checked',String(voice.enabled));
+      speech.title=voice.enabled?'语音识别已开启，点击关闭并清空文字':'语音识别已关闭，点击开启';speech.setAttribute('aria-label',speech.title);
+      speech.disabled=speechBusy||!s.connected||s.stopped||s.draining;
+      const recent=voice.recent.slice(-3);
+      transcript.hidden=!voice.enabled&&!voice.error;
+      transcript.textContent=(voice.error?'语音异常：'+voice.error+(recent.length?'\n':''):'')+(recent.length?recent.join('\n'):voice.enabled?(voice.state==='starting'?'准备本地模型…':'等待说话…'):'');
     }
     const recording=sdk.getRecordingStatus();
     const labels={idle:'开始录制',recording:'暂停录制',paused:'继续录制',starting:'正在启动',unknown:'状态未知',failed:'重新录制'};
@@ -57,7 +96,7 @@ const mountModerationPanel=()=>{
     recordLabel.textContent='录制';record.title=recording.error||(recordingDot.title+'，点击'+(labels[recording.state]||'开始录制'));
     record.disabled=recording.busy||['starting','unknown'].includes(recording.state)||!s.connected||s.stopped||s.draining;
     record.setAttribute('aria-label',recordingDot.title+'，'+(labels[recording.state]||'开始录制'));
-    if(BOOT.recording)info.textContent+='\n录制：'+recordingDot.title+(recording.error?'\n'+recording.error:'');
+    if(BOOT.recording&&recording.error)info.textContent+='\n录制异常：'+recording.error;
     for(const id of ['live-archive-wechat-record-icon','live-archive-download-button','live-archive-quality','live-archive-status'])document.getElementById(id)?.remove?.();
     const liking=sdk.likes?.getStatus();
     if(liking){
@@ -70,13 +109,13 @@ const mountModerationPanel=()=>{
       if(liking.enabled&&liking.mode==='clock')info.textContent+=' · 本批剩余 '+liking.remaining+(liking.next_at_ms?' · 下次 '+new Date(liking.next_at_ms).toLocaleTimeString(): '');
       info.textContent+=' · 已操作 '+liking.total_attempts+' 次';
     }
-    const t=s.timed_messages;if(t?.enabled&&t.min_comments>0){info.textContent+='\n定时文案：'+(t.active?(t.count_scope==='public_screen'?'公屏消息 ':t.count_scope==='text_comments'?'文字评论 ':'有效评论 ')+t.comments_since_last+'/'+t.min_comments+' · '+(t.waiting_ready?'等待发送条件':t.remaining_ms>0?'等待间隔':'间隔已到'):'已暂停');if(t.counted_total!==undefined)info.textContent+='\n本页累计计数 '+t.counted_total+(t.count_scope==='public_screen'||t.count_scope==='text_comments'?' · 包含场控消息':' · 自动回复排除 '+(t.excluded?.own_reply||0))+'（每轮生成后重计）';}};
+    const t=s.timed_messages;if(t?.enabled&&t.min_comments>0){info.textContent+='\n定时文案：'+(t.active?(t.count_scope==='public_screen'?'公屏消息 ':t.count_scope==='text_comments'?'文字评论 ':'有效评论 ')+t.comments_since_last+'/'+t.min_comments+' · '+(t.waiting_ready?'等待发送条件':t.remaining_ms>0?'等待间隔':'间隔已到'):'已暂停');if(t.counted_total!==undefined)info.textContent+='\n本页累计计数 '+t.counted_total+(t.count_scope==='public_screen'||t.count_scope==='text_comments'?' · 包含场控消息':' · 自动回复排除 '+(t.excluded?.own_reply||0))+'（每轮生成后重计）';}info.textContent=info.textContent.trim();};
   const actions=document.createElement('div');actions.id='live-archive-assistant-actions';
-  Object.assign(actions.style,{display:'flex',alignItems:'center',flexWrap:'wrap',gap:'5px',margin:'8px 0 5px'});
-  for(const node of [toggle,record,likesGroup])actions.appendChild(node);
-  for(const node of [actions,info,notice])details.appendChild(node);
+  Object.assign(actions.style,{display:'flex',alignItems:'center',flexWrap:'wrap',gap:'4px',margin:'0 0 5px',paddingRight:'44px'});
+  for(const node of [toggle,record,likesGroup,...(BOOT.speech_recognition?[speech]:[])])actions.appendChild(node);
+  for(const node of [actions,info,...(BOOT.speech_recognition?[transcript]:[]),notice])details.appendChild(node);
   box.appendChild(launcher);box.appendChild(details);document.body.appendChild(box);render();
-  const refresh=()=>{render();if(BOOT.recording)sdk.refreshRecording().then(render);};refresh();
+  const refresh=()=>{render();if(BOOT.recording)sdk.refreshRecording().then(render);if(BOOT.speech_recognition)sdk.refreshSpeech().then(render);};refresh();
   const timer=setInterval(refresh,1000);sdk.onDispose(()=>{clearInterval(timer);render();});
 };
 if(document.body)mountModerationPanel();else document.addEventListener('DOMContentLoaded',mountModerationPanel,{once:true});

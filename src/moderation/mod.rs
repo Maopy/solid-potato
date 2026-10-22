@@ -23,6 +23,7 @@ pub(crate) mod recording_quality;
 pub mod replay;
 pub mod retention;
 pub mod scheduler;
+pub mod speech;
 pub mod service;
 pub mod system_proxy;
 pub mod templates;
@@ -42,6 +43,8 @@ pub const WECHAT_FILL: &str = include_str!("../../assets/moderation/adapters/wec
 pub const AUTO_SEND: &str = include_str!("../../assets/moderation/sdk/submit.js");
 
 pub const PANEL: &str = concat!(
+    include_str!("../../assets/moderation/sdk/speech.js"),
+    "\n",
     include_str!("../../assets/moderation/sdk/likes.js"),
     "\n",
     include_str!("../../assets/moderation/sdk/panel.js")

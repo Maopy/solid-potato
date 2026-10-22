@@ -83,7 +83,7 @@
         status.textContent='';await render();return created;
       }finally{busy=false;button.disabled=false;}
     };
-    const controller={start,getStatus:()=>({stream_count:streams.size,room_metadata_received:metadataReceived,quality:streams.get(quality.value)?.label||null}),showTasks:()=>{box.style.display='block';list.hidden=false;return render();}};
+    const controller={start,getAudioSource:()=>{if(!inRoom())throw Error('直播间已切换');refreshStreams();const entries=[...streams].sort((a,b)=>compare(a[1],b[1]));if(!entries.length)throw Error('请先进入并播放直播');return entries[0][0];},getStatus:()=>({stream_count:streams.size,room_metadata_received:metadataReceived,quality:streams.get(quality.value)?.label||null}),showTasks:()=>{box.style.display='block';list.hidden=false;return render();}};
     window.__liveArchiveRecordingController=controller;
     button.onclick=()=>start().catch(e=>status.textContent=e.message);
     const names={waiting:'等待启动',downloading:'录制中',paused:'已暂停',finished:'已完成',failed:'失败'};

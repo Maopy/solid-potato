@@ -169,6 +169,7 @@ impl UserscriptHub {
         match endpoint {
             "hello" => b.hello(serde_json::from_value(body)?),
             "control" => b.control(bearer, body),
+            "speech" => b.speech(bearer, body),
             "likes/claim" => b.claim_like_period(bearer, serde_json::from_value(body)?),
             "events" => b.events(bearer, serde_json::from_value(body)?),
             "raw" => b.raw_messages(bearer, serde_json::from_value(body)?),

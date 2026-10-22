@@ -261,6 +261,9 @@ async fn handle(
                 "/v1/control" => {
                     bridge.control(&request.bearer, serde_json::from_slice(&request.body)?)
                 }
+                "/v1/speech" => {
+                    bridge.speech(&request.bearer, serde_json::from_slice(&request.body)?)
+                }
                 "/v1/hello" => bridge.hello(serde_json::from_slice(&request.body)?),
                 "/v1/events" => {
                     bridge.events(&request.bearer, serde_json::from_slice(&request.body)?)

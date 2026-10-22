@@ -339,8 +339,21 @@ from mitmproxy import http
 import http.client as http_client
 import base64
 import json
+import os
 import re
 import urllib.parse
+
+VERBOSE = os.environ.get("LIVE_ARCHIVE_VERBOSE", "").lower() in ("1", "true", "yes", "on")
+
+def verbose_log(message):
+    if VERBOSE:
+        print(message)
+
+def bridge_log(message, status):
+    if status >= 400:
+        print(message + str(status))
+    else:
+        verbose_log(message + str(status))
 
 ENDPOINT = {endpoint:?}
 TOKEN = {token:?}
@@ -573,7 +586,7 @@ def request(flow: http.HTTPFlow):
         content_type = "text/css; charset=utf-8" if asset_path.endswith(".css") else "application/javascript; charset=utf-8"
         flow.response = http.Response.make(200, source.encode("utf-8"), {{"Content-Type": content_type, "Cache-Control": "no-store"}})
         if asset_path == "/inject/channels.live.js":
-            print("live-archive: served reference channels.live.js")
+            verbose_log("live-archive: served reference channels.live.js")
         return
     if flow.request.host == "channels.weixin.qq.com" and path in ("/__live_archive/capture", "/__live_archive/capture-status"):
         if flow.request.method != "POST":
@@ -585,7 +598,7 @@ def request(flow: http.HTTPFlow):
         except Exception:
             status = 502
         kind = "button status" if path.endswith("capture-status") else "recording metadata"
-        print("live-archive: same-origin " + kind + " bridge returned " + str(status))
+        bridge_log("live-archive: same-origin " + kind + " bridge returned ", status)
         flow.response = http.Response.make(status, b"")
         return
     if flow.request.host == "channels.weixin.qq.com" and path.startswith("/api/v1/download_task/"):
@@ -597,7 +610,7 @@ def request(flow: http.HTTPFlow):
             status, response_body = forward_to_loopback(flow.request.path, body, flow.request.method)
         except Exception:
             status, response_body = 502, b'{{"code":502,"msg":"bridge unavailable"}}'
-        print("live-archive: reference download task API bridge returned " + str(status))
+        bridge_log("live-archive: reference download task API bridge returned ", status)
         flow.response = http.Response.make(status, response_body, {{"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}})
         return
     if flow.request.host == "channels.weixin.qq.com" and path == "/api/channels/live/profile":
@@ -620,6 +633,10 @@ def response(flow: http.HTTPFlow):
     # page reports its own stable anchor username together with the resolved
     # CDN URL. This avoids guessing a room from CDN host names or open order.
     content_type = flow.response.headers.get("content-type", "").lower()
+    page_path = flow.request.path.split("?", 1)[0]
+    # Service probes may return the site's HTML fallback; they are not pages.
+    if page_path.lower().startswith("/api/"):
+        return
     if flow.request.host == "channels.weixin.qq.com" and "text/html" in content_type:
         try:
             html = flow.response.get_text(strict=False)
@@ -647,9 +664,9 @@ def response(flow: http.HTTPFlow):
                 observer += LIVE_PAGE_TAG
             if "<head>" in html:
                 flow.response.set_text(html.replace("<head>", "<head>\n" + observer, 1))
-                print("live-archive: response observer injected into Channels page " + page_path)
+                verbose_log("live-archive: response observer injected into Channels page " + page_path)
             else:
-                print("live-archive: skipped non-document Channels HTML response " + page_path)
+                verbose_log("live-archive: skipped non-document Channels HTML response " + page_path)
         return
     request_path = flow.request.path.split("?", 1)[0].lower()
     # Resources served by this addon contain the bridge's own marker names;
@@ -793,6 +810,23 @@ mod tests {
         assert!(!addon.contains("flow.request.content"));
         assert!(!addon.contains("flow.response.content"));
         assert!(!addon.contains("or \"text/plain\" in content_type"));
+        let mut child = std::process::Command::new("python3")
+            .args([
+                "-c",
+                include_str!("../tests/support/capture_logging_driver.py"),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), addon.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
