@@ -260,6 +260,7 @@ impl Controller {
                     ProbeJournal::open(&directory.join("moderation-probe.sqlite3"))?,
                 );
                 let options = task.config.probe_options();
+                bridge.configure_room_profiles(options.room_profiles.clone());
                 bridge.configure_task(&task.id, budgets[&task.account_id].clone())?;
                 bridge.configure_ui(loaded.config.recording.enabled, loaded.config.dashboard);
                 bridge.set_moderation_enabled(loaded.config.start_enabled)?;
@@ -316,7 +317,7 @@ impl Controller {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("task bridge poisoned"))?;
             let prefix = format!("/__live_archive/moderation/v2/tasks/{}/", task.id);
-            routes.push(json!({"id":task.id,"label":task.label,"account":task.account_id,"host":task.scope.room_url.host_str(),"path":task.scope.room_url.path(),"prefix":prefix,"source":render_addon_with_prefix(&task.scope,task.server.address,&b.relay_token,true,&prefix)}));
+            routes.push(json!({"id":task.id,"label":task.label,"account":task.account_id,"host":task.scope.room_url.host_str(),"path":task.scope.room_url.path(),"prefix":prefix,"room_profiles":b.has_room_profiles(),"source":render_addon_with_prefix(&task.scope,task.server.address,&b.relay_token,true,&prefix)}));
         }
         Ok(
             include_str!("../../assets/moderation/proxy/controller.py").replace(

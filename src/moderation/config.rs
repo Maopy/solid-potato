@@ -28,6 +28,11 @@ pub enum Mode {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModerationConfig {
+    /// Existing top-level values remain the default for unmatched rooms.
+    #[serde(default)]
+    pub room_profiles: std::collections::BTreeMap<String, serde_yaml_ng::Value>,
+    #[serde(skip)]
+    pub resolved_room_profiles: std::collections::BTreeMap<String, super::room_profiles::RoomProfile>,
     pub version: u32,
     #[serde(default)]
     pub mode: Mode,
@@ -228,6 +233,14 @@ impl ModerationConfig {
             .parent()
             .context("configuration has no parent")?
             .to_path_buf();
+        let profiles = std::mem::take(&mut config.room_profiles);
+        config.resolved_room_profiles = super::room_profiles::load(&source, &base, &config.room.platform, profiles)?;
+        config.prepare(&base)?;
+        Ok(config)
+    }
+
+    pub(crate) fn prepare(&mut self, base: &Path) -> Result<()> {
+        let config = self;
         config
             .nickname_mapping
             .resolve(&base, &config.room.platform)?;
@@ -242,7 +255,7 @@ impl ModerationConfig {
         {
             config.injection.mitmdump = base.join(&config.injection.mitmdump);
         }
-        Ok(config)
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -414,6 +427,7 @@ impl ModerationConfig {
 
     pub fn probe_options(&self) -> ProbeOptions {
         ProbeOptions {
+            room_profiles: self.resolved_room_profiles.clone(),
             retention: self.storage.retention.clone(),
             delivery: self.delivery.clone(),
             timed_messages: self.timed_messages.clone(),

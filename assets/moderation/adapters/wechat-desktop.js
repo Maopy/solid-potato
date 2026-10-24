@@ -215,13 +215,14 @@ sdk.onDispose(()=>{wxLocalReview=false;wxApplicationReview.length=0;});
 const wxApplication = (channel, object) => {
   if (channel !== 'native_bridge') return;
   const type = wxOwnValue(object, 'msg_type') ?? wxOwnValue(object, 'msgType');
-  if (type !== 20009 && type !== 20013) return;
+  if (![20009,20013,20031].includes(type)) return;
   const text = wxOwnValue(object, 'payload');
   let value = null, format = 'opaque';
   if (typeof text === 'string' && text.length <= 524288) {
     if (wxJsonObjectText(text)) { value = JSON.parse(text); format = 'json'; }
     else { value = wxBase64Json(text,524288); if (value) format = 'base64_json'; }
   }
+  if (type === 20031) { if (value) wxUpgradeCandidate(channel,object,value); return; }
   const fields = value ? wxDetailFields(value) : [];
   wxReviewApplication(object,value);
   if (value && type===20009) wxGiftCandidate(channel,object,value);
@@ -410,6 +411,40 @@ const wxGiftCandidate = (channel, entry, value) => {
   }
 };
 sdk.onDispose(()=>{wxGiftSeen.clear();wxGiftRevisions.clear();wxGiftProgress.clear();});
+// Recorded native 20031/type=1 notices carry explicit old/new viewer levels.
+// Never infer an upgrade from a badge snapshot or from public chat text.
+const wxUpgradeSeen = new Set();
+const wxUpgradeCandidate = (channel, entry, value) => {
+  if (channel !== 'native_bridge' || !wxCollecting || sdk.getStatus().stopped
+      || wxOwnValue(value,'type') !== 1) return;
+  const before=wxOwnValue(value,'from_level'), after=wxOwnValue(value,'to_level');
+  // The native notice itself triggers congratulations; do not compare levels.
+  if (!Number.isSafeInteger(after) || after < 0) return;
+  const sender=wxOwnValue(entry,'from_user_contact');
+  const user=wxOwnValue(wxOwnValue(sender,'contact'),'username');
+  const nativeTarget=wxOwnValue(wxOwnValue(wxOwnValue(entry,'to_user_contact'),'contact'),'username');
+  // Public level notices may have an empty to_user_contact. Use only the
+  // native page identity bound into this document's bootstrap, never a
+  // configured/default recipient or a nickname inferred from public text.
+  const target=wxIdentifier(nativeTarget,256)?nativeTarget
+    :(nativeTarget===undefined||nativeTarget===null||nativeTarget==='')&&wxIdentifier(BOOT.room_identity,256)?BOOT.room_identity:null;
+  const id=wxOwnValue(entry,'client_msg_id'), nickname=wxGiftNickname(sender);
+  if (!wxIdentifier(id) || !wxIdentifier(user,256) || !wxIdentifier(target,256)
+      || !nickname?.trim()) return;
+  const key=JSON.stringify([user,id]);
+  if (wxUpgradeSeen.has(key) || sdk.getStatus().buffered >= 499) return;
+  if (sdk.emit('level.candidate','network',{
+    message_type:20031, decoder:'wechat.app20031.upgrade.candidate.v1',
+    upgrade_type:1, previous_level:before, new_level:after,
+    recipient_user_id:target, observed_at_ms:Date.now(),
+    recipient_source:wxIdentifier(nativeTarget,256)?'native_recipient':'page_room_identity',
+    confidence:'candidate', live_eligible:false, room_verified:false
+  },{native_event_id:id,user_id:user,nickname})) {
+    wxUpgradeSeen.add(key);
+    if (wxUpgradeSeen.size>2048) wxUpgradeSeen.delete(wxUpgradeSeen.values().next().value);
+  }
+};
+sdk.onDispose(()=>wxUpgradeSeen.clear());
 const wxChatCandidate = (channel, entry) => {
   if (channel !== 'native_bridge' || wxOwnValue(entry, 'type') !== 1) return;
   const id = wxOwnValue(entry, 'client_msg_id'), user = wxOwnValue(entry, 'username');
@@ -716,7 +751,7 @@ const wxShape = (channel, value, category = 'response', apiKind = 'other') => {
   let visits = 0, decoded = 0, parsedBytes = 0, applicationEntries = 0, applicationScanned = 0;
   const application = object => {
     if (!object || typeof object !== 'object' || applications.has(object) || applicationEntries >= 500) return;
-    if ((wxOwnValue(object, 'msg_type') ?? wxOwnValue(object, 'msgType')) !== 20009 && (wxOwnValue(object, 'msg_type') ?? wxOwnValue(object, 'msgType')) !== 20013) return;
+    if (![20009,20013,20031].includes(wxOwnValue(object, 'msg_type') ?? wxOwnValue(object, 'msgType'))) return;
     applications.add(object); applicationEntries++; wxApplication(channel, object);
   };
   const add = (path, type) => { if (fields.size < 24 && path.length <= 64) fields.add(path + ':' + type); };

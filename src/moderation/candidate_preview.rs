@@ -49,6 +49,7 @@ struct Pending {
 }
 pub struct CandidatePreview {
     target: String,
+    upgrades: super::upgrade::CandidateUpgrades,
     welcomes: super::welcome::CandidateWelcomes,
     seen: HashSet<(String, String)>,
     pending: BTreeMap<String, Pending>,
@@ -72,6 +73,7 @@ impl CandidatePreview {
     pub fn with_format(target: String, config: &super::engine::RulesConfig) -> Result<Self> {
         let max_text_chars = config.max_text_chars.min(80);
         Ok(Self {
+            upgrades: super::upgrade::CandidateUpgrades::new(config)?,
             target,
             welcomes: super::welcome::CandidateWelcomes::new(config)?,
             seen: HashSet::new(),
@@ -164,6 +166,11 @@ impl CandidatePreview {
         if event.event_type == "room.ended" {
             self.paused = true;
             return self.cancel(now, "room_ended");
+        }
+        if event.event_type == "level.candidate" {
+            if self.paused { return vec![]; }
+            let records = self.upgrades.ingest(now, event, &self.target);
+            return records.into_iter().map(|record| self.remember(record)).collect();
         }
         if event.event_type == "member.candidate" {
             return if self.paused

@@ -27,13 +27,29 @@ def route_for(flow):
     return next((r for r in ROUTES if flow.request.host == r['host']), None)
 
 def loader(matches):
-    choices = [{k:r[k] for k in ('id','label','account','prefix','host','path')} for r in matches]
+    choices = [{**{k:r[k] for k in ('id','label','account','prefix','host','path')}, 'room_profiles':r.get('room_profiles',False)} for r in matches]
     # TextContent and fixed generated paths keep labels out of HTML/JS parsing.
-    return """(() => {
+    return r"""(() => {
       if (window.__liveArchiveModerationV1 || document.getElementById('live-archive-task-picker')) return;
       const choices=CHOICES;
       const nonce=document.currentScript?.nonce||'';
-      const load=choice=>{const s=document.createElement('script');s.src=choice.prefix+'bootstrap.js';if(nonce)s.nonce=nonce;document.head.appendChild(s);};
+      const load=choice=>{
+        let attempts=0;
+        const connect=()=>{
+          let identity=null;
+          if(choice.host==='channels.weixin.qq.com')try{
+            const check=window.WXU?.check_live_existing;
+            if(typeof check==='function'){
+              const [error,profile]=check({silence:true});
+              if(!error)identity=profile?.contact?.username||profile?.username||null;
+            }
+          }catch(_){}
+          const valid=typeof identity==='string'&&identity.trim()===identity&&identity.length>0&&identity.length<=256&&!/[\u0000-\u0020\u007f-\u009f]/.test(identity);
+          if(choice.room_profiles&&!valid&&attempts++<50){setTimeout(connect,200);return;}
+          const s=document.createElement('script');s.src=choice.prefix+'bootstrap.js'+(valid?'?room_identity='+encodeURIComponent(identity):'');
+          if(nonce)s.nonce=nonce;document.head.appendChild(s);
+        };connect();
+      };
       if(choices.length===1){load(choices[0]);return;}
       const show=()=>{
         const box=document.createElement('div');box.id='live-archive-task-picker';

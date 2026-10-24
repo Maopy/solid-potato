@@ -112,7 +112,8 @@ impl UserscriptHub {
                 scope,
                 ProbeJournal::open(&dir.join("moderation-probe.sqlite3"))?,
             );
-            configure_bridge(&mut b, &id, &t.options, t.budget.clone(), s.recording)?;
+            let selected = t.options.room_profiles.get(&key).map(|p|p.apply(&t.options));
+            configure_bridge(&mut b, &id, selected.as_ref().unwrap_or(&t.options), t.budget.clone(), s.recording)?;
             s.rooms.insert(
                 key.clone(),
                 Arc::new(Room {

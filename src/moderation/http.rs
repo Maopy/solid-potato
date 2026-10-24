@@ -242,7 +242,8 @@ async fn handle(
                 br#"{"error":"invalid_method"}"#.to_vec(),
             )
         } else if request.path == "/v1/bootstrap" {
-            match bridge.bootstrap(&request.bearer) {
+            let identity = serde_json::from_slice::<Value>(&request.body).ok().and_then(|v| v["room_identity"].as_str().map(str::to_owned));
+            match bridge.bootstrap_for_room(&request.bearer, identity.as_deref()) {
                 Ok(script) => (200, "application/javascript", script.into_bytes()),
                 Err(_) => (
                     403,

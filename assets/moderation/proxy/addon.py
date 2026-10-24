@@ -166,7 +166,10 @@ async def request(flow: http.HTTPFlow):
         return
     endpoint = path[len(CONFIG["prefix"]):]
     if endpoint == "bootstrap.js" and flow.request.method == "GET":
-        bridge_path, body = "/v1/bootstrap", b"{}"
+        identity = urllib.parse.parse_qs(urllib.parse.urlsplit(flow.request.pretty_url).query).get("room_identity", [None])
+        identity = identity[0] if len(identity) == 1 else None
+        bridge_path = "/v1/bootstrap"
+        body = json.dumps({"room_identity": identity} if isinstance(identity, str) and len(identity) <= 256 else {}).encode("utf-8")
         bearer, origin = CONFIG["relay_token"], ""
     elif endpoint in ("control", "speech", "hello", "events", "raw", "poll", "results", "delivery", "goodbye") and flow.request.method == "POST":
         if flow.request.headers.get("origin") != "https://" + CONFIG["host"]:

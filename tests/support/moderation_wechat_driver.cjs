@@ -75,12 +75,14 @@ const context=vm.createContext({window:browser,location,XMLHttpRequest:Xhr,perfo
   document.readyState='complete';domListeners.get('DOMContentLoaded')();
   const entry=document.getElementById('live-archive-moderation-entry');
   const panel=document.getElementById('live-archive-moderation-panel');
-  const toggle=document.getElementById('live-archive-moderation-toggle');
+  const toggle=panel.children.find(node=>node.id==='live-archive-moderation-toggle');
   assert.equal(panel.hidden,true);assert.equal(toggle.disabled,true);
   await browser.fetch(origin+'/synthetic-local-fixture');
   assert.equal(browser.__liveArchiveModerationV1.getStatus().decoder.network_messages,0);
-  await new Promise(resolve=>setTimeout(resolve,600));
-  entry.click();assert.equal(panel.hidden,false);assert.equal(toggle.disabled,false);
+  entry.click();assert.equal(panel.hidden,false);
+  const connectionDeadline=Date.now()+5000;
+  while(toggle.disabled&&Date.now()<connectionDeadline)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(toggle.disabled,false,JSON.stringify(browser.__liveArchiveModerationV1.getStatus()));
   assert.equal(entry.attributes['aria-expanded'],'true');
   // The real page replaces these during initialization. Preserve its wrappers
   // (including wrappers delegating to our old hooks) when Start reattaches.
@@ -362,6 +364,16 @@ const context=vm.createContext({window:browser,location,XMLHttpRequest:Xhr,perfo
     supporterEntry('supporter-b','fixture-guardian','Fixture guardian',['星守护']),
     supporterEntry('supporter-both','fixture-both','Fixture both',['超粉','星守护']),
     supporterEntry('ordinary-title-name','fixture-title-name','超粉 Fixture name',['星守护者'])]);
+  const upgrade=(id,body={type:1,from_level:0,to_level:1})=>({msg_type:20031,client_msg_id:id,
+    from_user_contact:{contact:{username:'fixture-upgrade-user',nickname:'Fixture upgraded'}},
+    to_user_contact:{contact:{username:'fixture-host'}},payload:Buffer.from(JSON.stringify(body)).toString('base64')});
+  nativeBridge._handleMessageFromWeixin({app_msg_list:[upgrade('upgrade-a'),upgrade('upgrade-a'),
+    {...upgrade('upgrade-no-recipient',{type:1,from_level:1,to_level:8}),to_user_contact:{contact:{bind_info:[],menu:[],reference_info:[]},badge_infos:[]}},
+    {...upgrade('upgrade-no-recipient',{type:1,from_level:1,to_level:8}),to_user_contact:{}},
+    upgrade('upgrade-same-level',{type:1,from_level:1,to_level:1}),
+    upgrade('upgrade-unknown',{type:2,from_level:0,to_level:1}),
+    {...upgrade('upgrade-missing'),from_user_contact:{}},
+    {...upgrade('upgrade-chat'),msg_type:1}]});
   const conflictArrival=arrivalEntry('arrival-conflict');conflictArrival.username='different-contact';
   deliver([conflictArrival,arrivalEntry('arrival-notice','fixture-arrival-other','Another arrival','欢迎某某来了'),
     {...arrivalEntry('arrival-wrong-type'),type:12345},arrivalEntry('arrival-empty','fixture-arrival-empty','Empty arrival','')]);

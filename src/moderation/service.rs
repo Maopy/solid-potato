@@ -13,6 +13,7 @@ use url::Url;
 
 #[derive(Clone, Default)]
 pub struct ProbeOptions {
+    pub room_profiles: std::collections::BTreeMap<String, super::room_profiles::RoomProfile>,
     pub delivery: super::delivery::DeliveryConfig,
     pub timed_messages: super::timed::TimedConfig,
     pub likes: super::likes::LikeConfig,
@@ -97,7 +98,10 @@ pub async fn run_probe_with_options(
     duration_seconds: u64,
     options: ProbeOptions,
 ) -> Result<()> {
+    let room_key = ProbeScope::from_room_url(room.clone())?.room_key;
+    let options = options.room_profiles.get(&room_key).map(|p|p.apply(&options)).unwrap_or(options);
     let ProbeOptions {
+        room_profiles,
         delivery,
         timed_messages,
         likes,
@@ -190,6 +194,7 @@ pub async fn run_probe_with_options(
     let directory = directory.canonicalize()?;
     let database = directory.join("moderation-probe.sqlite3");
     let mut bridge = ProbeBridge::new(scope.clone(), ProbeJournal::open(&database)?);
+    bridge.configure_room_profiles(room_profiles);
     bridge.configure_ui(recording.enabled, false);
     bridge.configure_delivery(delivery)?;
     bridge.configure_timed(timed_messages)?;

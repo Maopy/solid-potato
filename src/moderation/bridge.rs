@@ -17,6 +17,7 @@ use std::{
 use uuid::Uuid;
 
 struct Ticket {
+    profile: Option<super::room_profiles::RoomProfile>,
     deadline: Instant,
 }
 struct Session {
@@ -44,6 +45,7 @@ pub struct ProbeBridge {
     journal: ProbeJournal,
     pub counts: HashMap<String, u64>,
     pub total_events: usize,
+    room_profiles: std::collections::BTreeMap<String, super::room_profiles::RoomProfile>,
     candidate_config: super::candidate_preview::CandidatePreviewConfig,
     candidate_fill_only: bool,
     rules_preview: bool,
@@ -97,6 +99,7 @@ impl ProbeBridge {
             journal,
             counts: HashMap::new(),
             total_events: 0,
+            room_profiles: Default::default(),
             candidate_config: Default::default(),
             candidate_fill_only: false,
             rules_preview: false,
@@ -131,6 +134,14 @@ impl ProbeBridge {
         }
     }
 
+    pub fn configure_room_profiles(&mut self, profiles: std::collections::BTreeMap<String, super::room_profiles::RoomProfile>) {
+        self.room_profiles = profiles;
+    }
+    pub fn has_room_profiles(&self) -> bool { !self.room_profiles.is_empty() }
+    fn default_room_profile(&self) -> super::room_profiles::RoomProfile {
+        super::room_profiles::RoomProfile { rules:self.rules_config.clone(), timed:self.timed_config.clone(),
+            keywords:self.keyword_config.clone(), likes:self.likes_config.clone(), candidate:self.candidate_config.clone() }
+    }
     pub fn configure_ui(&mut self, recording: bool, unified: bool) {
         self.recording_ui = recording;
         self.unified_ui = unified;
@@ -482,6 +493,7 @@ impl ProbeBridge {
                 for log in &logs {
                     if log["kind"] == "gift_candidate_draft"
                         || log["kind"] == "welcome_candidate_draft"
+                        || log["kind"] == "upgrade_candidate_draft"
                     {
                         fill_logs.extend(fill.enqueue(
                             now,
@@ -512,7 +524,7 @@ impl ProbeBridge {
                     .map(|id| format!("task {id} "))
                     .unwrap_or_default(),
                 match log["kind"].as_str() {
-                    Some("gift_candidate_draft" | "welcome_candidate_draft") => "candidate draft",
+                    Some("gift_candidate_draft" | "welcome_candidate_draft" | "upgrade_candidate_draft") => "candidate draft",
                     Some("gift_candidate_cancelled" | "welcome_candidate_cancelled") =>
                         "candidate cancellation",
                     _ => "candidate event",
@@ -640,6 +652,7 @@ impl ProbeBridge {
         self.tickets.insert(
             ticket.clone(),
             Ticket {
+                profile: None,
                 deadline: Instant::now() + Duration::from_secs(60),
             },
         );
@@ -648,7 +661,20 @@ impl ProbeBridge {
     }
 
     pub fn bootstrap(&mut self, relay: &str) -> Result<String> {
-        let config = self.bootstrap_config(relay)?;
+        self.bootstrap_for_room(relay, None)
+    }
+    pub fn bootstrap_for_room(&mut self, relay: &str, identity: Option<&str>) -> Result<String> {
+        let mut config = self.bootstrap_config(relay)?;
+        let identity = identity.filter(|id| self.scope.platform()=="wechat_channels" && super::events::valid_user_id(id) && !id.trim().is_empty() && id.trim()==*id);
+        let mut profile = identity.and_then(|id|self.room_profiles.get(id)).cloned().unwrap_or_else(||self.default_room_profile());
+        config["room_profile"] = json!(identity.filter(|id|self.room_profiles.contains_key(*id)).unwrap_or("default"));
+        if let Some(id) = identity {
+            config["room_identity"] = json!(id);
+            if profile.candidate.enabled { profile.candidate.recipient_user_id=Some(id.into()); }
+        }
+        profile.boot(&mut config);
+        self.tickets.get_mut(config["ticket"].as_str().expect("minted ticket")).expect("minted ticket").profile=Some(profile);
+
         if self.scope.platform() == "wechat_channels" {
             return Ok(format!(
                 "(() => {{ const BOOT = {config};\n{SDK}\n{RAW_CAPTURE}\n{AUTO_SEND}\n{WECHAT_DESKTOP}\n{WECHAT_FILL}\n{PANEL}\n}})();"
@@ -668,16 +694,6 @@ impl ProbeBridge {
         {
             bail!("WeChat desktop adapter currently supports observation only");
         }
-        if self.keyword_config.enabled
-            && (!self.automatic_send || !self.fill_preview || self.fill_test_text.is_some())
-        {
-            bail!("keyword_replies requires automatic sending without fixed test text");
-        }
-        if self.timed_config.enabled
-            && (!self.automatic_send || !self.fill_preview || self.fill_test_text.is_some())
-        {
-            bail!("timed_messages requires automatic sending without fixed test text");
-        }
         self.prune();
         if self.storage_failed {
             bail!("journal failed; restart required");
@@ -695,6 +711,17 @@ impl ProbeBridge {
         }
         if !self.tickets.contains_key(&hello.ticket) {
             bail!("pairing denied");
+        }
+        let profile = self.tickets.get(&hello.ticket).and_then(|ticket|ticket.profile.clone()).unwrap_or_else(||self.default_room_profile());
+        if profile.keywords.enabled
+            && (!self.automatic_send || !self.fill_preview || self.fill_test_text.is_some())
+        {
+            bail!("keyword_replies requires automatic sending without fixed test text");
+        }
+        if profile.timed.enabled
+            && (!self.automatic_send || !self.fill_preview || self.fill_test_text.is_some())
+        {
+            bail!("timed_messages requires automatic sending without fixed test text");
         }
         // A scoped, single-use ticket may replace only this tab's previous
         // document. Other tabs still cannot take over an automatic sender.
@@ -774,7 +801,7 @@ impl ProbeBridge {
             let mut preview = OnlinePreview::with_rules(
                 self.scope.room_key.clone(),
                 format!("{}:{binding}", self.run_id),
-                self.rules_config.clone(),
+                profile.rules.clone(),
             )?;
             if self.scheduler_preview {
                 preview.configure_scheduler(self.scheduler_config.clone())?;
@@ -790,11 +817,11 @@ impl ProbeBridge {
                 client_id: hello.client_id.clone(),
                 collecting: self.scope.platform() != "wechat_channels",
                 keywords: super::keywords::KeywordReplies::new(
-                    self.keyword_config.clone(),
+                    profile.keywords.clone(),
                     self.moderation_enabled && self.scope.platform() != "wechat_channels",
                 ),
                 timed: super::timed::TimedMessages::new(
-                    self.timed_config.clone(),
+                    profile.timed.clone(),
                     self.now(),
                     self.moderation_enabled && self.scope.platform() != "wechat_channels",
                 ),
@@ -805,13 +832,13 @@ impl ProbeBridge {
                 raw_acked_seq: 0,
                 fill,
                 preview,
-                candidate_preview: self.candidate_config.enabled.then(|| {
+                candidate_preview: profile.candidate.enabled.then(|| {
                     super::candidate_preview::CandidatePreview::with_format(
-                        self.candidate_config
+                        profile.candidate
                             .recipient_user_id
                             .clone()
                             .expect("validated target"),
-                        &self.rules_config,
+                        &profile.rules,
                     )
                     .expect("validated rules format")
                 }),
@@ -1158,7 +1185,9 @@ impl ProbeBridge {
     }
 
     fn keyword_drafts(&mut self, connection: &str, now: u64, events: &[ProbeEvent]) -> Result<()> {
-        if self.draining || !self.moderation_enabled || !self.keyword_config.enabled {
+        // Each session owns the selected room's keyword configuration. The
+        // default may be disabled while this room explicitly enables replies.
+        if self.draining || !self.moderation_enabled {
             return Ok(());
         }
         let platform = self.scope.platform();

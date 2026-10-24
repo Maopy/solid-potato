@@ -225,6 +225,10 @@ pub fn sanitize(event: &ProbeEvent) -> ProbeEvent {
             "live_eligible",
             "room_verified",
         ],
+        "level.candidate" => &[
+            "message_type", "decoder", "upgrade_type", "previous_level", "new_level",
+            "recipient_user_id", "recipient_source", "observed_at_ms", "confidence", "live_eligible", "room_verified",
+        ],
         "member.candidate" => &[
             "supporter_title",
             "message_type",
@@ -473,6 +477,7 @@ pub fn sanitize(event: &ProbeEvent) -> ProbeEvent {
             | "chat.keyword_candidate"
             | "chat.activity"
             | "member.candidate"
+            | "level.candidate"
             | "gift.candidate"
             | "gift.candidate_revision"
     ) {

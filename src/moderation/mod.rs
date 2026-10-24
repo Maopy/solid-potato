@@ -19,6 +19,7 @@ pub mod nicknames;
 pub mod online;
 pub mod protocol;
 pub mod recording;
+pub mod room_profiles;
 pub(crate) mod recording_quality;
 pub mod replay;
 pub mod retention;
@@ -29,6 +30,7 @@ pub mod system_proxy;
 pub mod templates;
 pub mod timed;
 mod welcome;
+mod upgrade;
 
 pub const RAW_CAPTURE: &str = include_str!("../../assets/moderation/sdk/raw.js");
 

@@ -193,7 +193,7 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
     let bootstrap = directory.path().join("bootstrap.js");
     std::fs::write(
         &bootstrap,
-        bridge.bootstrap(&bridge.relay_token.clone()).unwrap(),
+        bridge.bootstrap_for_room(&bridge.relay_token.clone(), Some("fixture-recipient")).unwrap(),
     )
     .unwrap();
     let mut server = ProbeServer::bind(bridge).await.unwrap();
@@ -257,6 +257,7 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
     let mut candidates = Vec::new();
     let mut gift_candidates = Vec::new();
     let mut arrivals = Vec::new();
+    let mut upgrades = Vec::new();
     let mut gift_revisions = Vec::new();
     let mut command_wire_persisted = false;
     let mut gift_hint_persisted = false;
@@ -269,6 +270,7 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
         let event: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_ne!(event["event_type"], "gift.observed");
         assert_ne!(event["event_type"], "member.entered");
+        if event["event_type"] == "level.candidate" { upgrades.push(event.clone()); }
         if event["event_type"] == "member.candidate" {
             assert_eq!(event["payload"]["confidence"], "candidate");
             assert_eq!(event["payload"]["live_eligible"], false);
@@ -379,6 +381,16 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
     assert!(command_wire_persisted && gift_hint_persisted);
     assert!(application_json_persisted);
     assert!(application_identity_shape_persisted);
+    assert_eq!(upgrades.len(), 3);
+    assert_eq!(upgrades[0]["payload"]["new_level"], 1);
+    assert_eq!(upgrades[0]["payload"]["previous_level"], 0);
+    assert_eq!(upgrades[0]["payload"]["room_verified"], false);
+    assert_eq!(upgrades[1]["payload"]["previous_level"], 1);
+    assert_eq!(upgrades[1]["payload"]["new_level"], 8);
+    assert_eq!(upgrades[1]["payload"]["recipient_user_id"], "fixture-recipient");
+    assert_eq!(upgrades[1]["payload"]["recipient_source"], "page_room_identity");
+    assert_eq!(upgrades[2]["payload"]["previous_level"], 1);
+    assert_eq!(upgrades[2]["payload"]["new_level"], 1);
     assert_eq!(arrivals.len(), 7);
     assert_eq!(arrivals[3]["payload"]["supporter_title"], "super_fan");
     assert_eq!(arrivals[4]["payload"]["supporter_title"], "star_guardian");
