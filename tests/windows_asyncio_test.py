@@ -32,7 +32,8 @@ class CleanupTests(unittest.TestCase):
         sock = SimpleNamespace(fileno=lambda: 1, shutdown=shutdown, close=lambda: events.append('close'))
         transport = SimpleNamespace(_sock=sock, _called_connection_lost=False,
             _protocol=SimpleNamespace(connection_lost=lost),
-            _server=SimpleNamespace(_detach=lambda t: events.append('detach')))
+            # CPython 3.12 calls _detach(), while 3.14 passes the transport.
+            _server=SimpleNamespace(_detach=lambda *args: events.append('detach')))
         return transport, sock, events
 
     def test_reset_still_closes_and_detaches_exactly_once(self):

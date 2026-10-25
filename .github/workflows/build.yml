@@ -65,6 +65,12 @@ jobs:
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -n 160 cargo-test.log >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
+            python - <<'PY'
+          from pathlib import Path
+          text = '\n'.join(Path('cargo-test.log').read_text(encoding='utf-8', errors='replace').splitlines()[-70:])
+          text = text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f'::error title=Rust failure details::{text}')
+          PY
           fi
   publish:
     name: Publish all platforms
