@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::{Semaphore, watch},
     task::JoinHandle,
@@ -25,6 +25,8 @@ static INFERENCE: OnceLock<Semaphore> = OnceLock::new();
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     provider: String,
+    runner: PathBuf,
+    source: PathBuf,
     executable: PathBuf,
     ffmpeg: PathBuf,
     model: PathBuf,
@@ -42,6 +44,8 @@ impl Default for Config {
             .unwrap_or(Path::new("dist"));
         Self {
             provider: "whisper_cpp".into(),
+            runner: PathBuf::new(),
+            source: PathBuf::new(),
             executable: "whisper-cli".into(),
             ffmpeg: "ffmpeg".into(),
             model: dist.join(".live-archive-models/ggml-small.bin"),
@@ -75,7 +79,12 @@ impl Config {
         if config.model.is_relative() {
             config.model = base.join(&config.model);
         }
-        for p in [&mut config.ffmpeg, &mut config.executable] {
+        for p in [
+            &mut config.ffmpeg,
+            &mut config.executable,
+            &mut config.runner,
+            &mut config.source,
+        ] {
             if p.is_relative() && p.components().count() > 1 {
                 *p = base.join(&*p);
             }
@@ -83,14 +92,26 @@ impl Config {
         Ok(config)
     }
     async fn validate(&self) -> Result<()> {
-        if self.provider != "whisper_cpp"
+        if !matches!(self.provider.as_str(), "whisper_cpp" | "firered_asr2_aed")
             || !(1..=16).contains(&self.threads)
             || !matches!(self.language.as_str(), "zh" | "auto" | "en")
             || self.model_sha256.len() != 64
         {
             bail!("本地语音配置无效")
         }
-        let path = self.model.clone();
+        let path = if self.provider == "firered_asr2_aed" {
+            if !self.runner.is_file()
+                || !self.source.join("fireredasr2s").is_dir()
+                || ["cmvn.ark", "dict.txt", "train_bpe1000.model"]
+                    .iter()
+                    .any(|p| !self.model.join(p).is_file())
+            {
+                bail!("FireRed 本地引擎或模型文件未安装")
+            }
+            self.model.join("model.pth.tar")
+        } else {
+            self.model.clone()
+        };
         let expected = self.model_sha256.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
             use std::io::Read;
@@ -311,6 +332,9 @@ async fn recognize(config: &Config, pcm: &[u8]) -> Result<Vec<String>> {
     wav.write_all(&header).await?;
     wav.write_all(pcm).await?;
     drop(wav);
+    if config.provider == "firered_asr2_aed" {
+        return firered_recognize(config, &input).await;
+    }
     let mut command = Command::new(&config.executable);
     command
         .arg("-m")
@@ -352,9 +376,156 @@ async fn recognize(config: &Config, pcm: &[u8]) -> Result<Vec<String>> {
         .collect())
 }
 
+// One resident model per process; the existing inference semaphore serializes rooms.
+static FIRERED: OnceLock<tokio::sync::Mutex<Option<(String, FireRedWorker)>>> = OnceLock::new();
+struct FireRedWorker {
+    child: tokio::process::Child,
+    input: tokio::process::ChildStdin,
+    output: BufReader<tokio::process::ChildStdout>,
+}
+impl Drop for FireRedWorker {
+    fn drop(&mut self) {
+        crate::child_process::drop_proxy_child(&mut self.child);
+    }
+}
+impl FireRedWorker {
+    async fn response(&mut self) -> Result<serde_json::Value> {
+        let mut line = Vec::new();
+        // Bound stdout even if the interpreter or dependency returns malformed data.
+        (&mut self.output)
+            .take(1024 * 1024)
+            .read_until(b'\n', &mut line)
+            .await?;
+        if line.last() != Some(&b'\n') {
+            bail!("FireRed 返回数据不完整")
+        }
+        let value: serde_json::Value = serde_json::from_slice(&line)?;
+        if value.get("error").is_some() {
+            bail!("FireRed 识别失败: {}", value["error"])
+        }
+        Ok(value)
+    }
+    async fn spawn(config: &Config) -> Result<Self> {
+        let mut command = Command::new(&config.executable);
+        command
+            .arg("-u")
+            .arg(&config.runner)
+            .arg("--source")
+            .arg(&config.source)
+            .arg("--model")
+            .arg(&config.model)
+            .arg("--threads")
+            .arg(config.threads.to_string())
+            .env("PYTHONUTF8", "1")
+            .env("HF_HUB_OFFLINE", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        if config.use_gpu {
+            command.arg("--gpu");
+        }
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
+        let mut child = command.spawn().context("无法启动 FireRed 本地引擎")?;
+        let input = child.stdin.take().context("FireRed stdin missing")?;
+        let output = BufReader::new(child.stdout.take().context("FireRed stdout missing")?);
+        let mut worker = Self {
+            child,
+            input,
+            output,
+        };
+        let ready = tokio::time::timeout(Duration::from_secs(180), worker.response())
+            .await
+            .context("FireRed 加载模型超时")??;
+        if ready["ready"] != true {
+            bail!("FireRed 启动失败")
+        }
+        Ok(worker)
+    }
+}
+async fn firered_recognize(config: &Config, wav: &Path) -> Result<Vec<String>> {
+    let fingerprint = format!(
+        "{:?}",
+        (
+            &config.executable,
+            &config.runner,
+            &config.source,
+            &config.model,
+            &config.model_sha256,
+            config.use_gpu,
+            config.threads
+        )
+    );
+    let mut cached = FIRERED
+        .get_or_init(|| tokio::sync::Mutex::new(None))
+        .lock()
+        .await;
+    // Own the worker across awaits: cancellation kills it rather than caching a stale reply.
+    let mut worker = match cached.take() {
+        Some((key, worker)) if key == fingerprint => worker,
+        _ => FireRedWorker::spawn(config).await?,
+    };
+    let request = serde_json::to_vec(&serde_json::json!({"wav": wav}))?;
+    worker.input.write_all(&request).await?;
+    worker.input.write_all(b"\n").await?;
+    worker.input.flush().await?;
+    let value = tokio::time::timeout(Duration::from_secs(90), worker.response())
+        .await
+        .context("FireRed 本地语音识别超时")??;
+    let text = value["text"]
+        .as_str()
+        .context("FireRed 语音结果格式无效")?
+        .to_owned();
+    *cached = Some((fingerprint, worker));
+    Ok(vec![text])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn firered_reuses_the_model_and_discards_a_failed_transport() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = temp.path().join("worker.py");
+        std::fs::write(
+            &runner,
+            r#"
+import json, sys
+print('{"ready":true}', flush=True)
+count = 0
+for line in sys.stdin:
+    request = json.loads(line)
+    if request['wav'] == 'fail':
+        print('{"error":"test failure"}', flush=True)
+    else:
+        count += 1
+        print(json.dumps({'text':str(count)}), flush=True)
+"#,
+        )
+        .unwrap();
+        let config = Config {
+            provider: "firered_asr2_aed".into(),
+            executable: "python".into(),
+            runner,
+            use_gpu: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            firered_recognize(&config, Path::new("one")).await.unwrap(),
+            ["1"]
+        );
+        assert_eq!(
+            firered_recognize(&config, Path::new("two")).await.unwrap(),
+            ["2"]
+        );
+        assert!(firered_recognize(&config, Path::new("fail")).await.is_err());
+        assert_eq!(
+            firered_recognize(&config, Path::new("new")).await.unwrap(),
+            ["1"]
+        );
+        FIRERED.get().unwrap().lock().await.take();
+    }
     #[test]
     fn recent_text_is_bounded_and_clear_replaces_the_entire_session() {
         let mut recent = VecDeque::new();

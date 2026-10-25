@@ -153,11 +153,13 @@ const emitEcho=text=>{
   if(saved===undefined)delete data.msg_list;else data.msg_list=saved;
 };
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const until=async test=>{const deadline=Date.now()+16000;while(!test()&&Date.now()<deadline)await sleep(100);assert.ok(test(),'condition timeout');};
+const until=async(test,timeout=16000)=>{const deadline=Date.now()+timeout;while(!test()&&Date.now()<deadline)await sleep(100);assert.ok(test(),'condition timeout: '+JSON.stringify(browser.__liveArchiveModerationV1?.getStatus()));};
 (async()=>{
   vm.runInContext(fs.readFileSync(bootstrap,'utf8'),context);
   document.readyState='complete';domListeners.get('DOMContentLoaded')();
-  await until(()=>browser.__liveArchiveModerationV1.getStatus().connected);
+  // Windows may start several fixture browsers while Cargo links other tests.
+  // Keep action/receipt deadlines unchanged; give only initial pairing more time.
+  await until(()=>browser.__liveArchiveModerationV1.getStatus().connected,30000);
   document.getElementById('live-archive-moderation-entry').click();
   const toggle=document.getElementById('live-archive-moderation-toggle');toggle.click();
   if(scenario==='open_only'){

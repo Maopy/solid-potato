@@ -317,7 +317,7 @@ impl Controller {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("task bridge poisoned"))?;
             let prefix = format!("/__live_archive/moderation/v2/tasks/{}/", task.id);
-            routes.push(json!({"id":task.id,"label":task.label,"account":task.account_id,"host":task.scope.room_url.host_str(),"path":task.scope.room_url.path(),"prefix":prefix,"room_profiles":b.has_room_profiles(),"source":render_addon_with_prefix(&task.scope,task.server.address,&b.relay_token,true,&prefix)}));
+            routes.push(json!({"id":task.id,"label":task.label,"account":task.account_id,"host":task.scope.room_url.host_str(),"path":task.scope.room_url.path(),"prefix":prefix,"room_profiles":b.has_room_profiles(),"wait_for_room_identity":b.waits_for_room_identity(),"source":render_addon_with_prefix(&task.scope,task.server.address,&b.relay_token,true,&prefix)}));
         }
         Ok(
             include_str!("../../assets/moderation/proxy/controller.py").replace(
@@ -502,6 +502,11 @@ pub async fn serve(path: &Path) -> Result<()> {
         println!("统一控制页：{}", dashboard.url);
         #[cfg(target_os = "macos")]
         let _ = std::process::Command::new("open")
+            .arg(&dashboard.url)
+            .spawn();
+        #[cfg(target_os = "windows")]
+        let _ = std::process::Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
             .arg(&dashboard.url)
             .spawn();
         Some(dashboard)

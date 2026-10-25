@@ -38,7 +38,8 @@ if sys.argv[4]=='disarm':
  child.stdin.write('restored\n');child.stdin.close();assert child.wait(timeout=10)==0
 else:time.sleep(60)
 "#).unwrap();
-        let mut child = Command::new("python3")
+        let mut child = Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .args(["-X", "utf8"])
             .arg(&owner)
             .arg(env!("CARGO_BIN_EXE_live-archive-core"))
             .arg(p)

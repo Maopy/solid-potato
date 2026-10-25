@@ -291,6 +291,39 @@ impl CommandRunner for WindowsRunner {
 }
 
 #[test]
+fn windows_proxy_accepts_a_fresh_profile_without_proxy_values() {
+    struct FreshProfile;
+    impl CommandRunner for FreshProfile {
+        fn run(&self, _: &str, arguments: &[&str]) -> anyhow::Result<String> {
+            if arguments.contains(&"/v") {
+                anyhow::bail!("value not found");
+            }
+            Ok("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings".into())
+        }
+    }
+    let controller = WindowsInternetSettingsProxyController::with_runner(FreshProfile);
+    assert_eq!(
+        controller.current_proxy().unwrap(),
+        ProxySnapshot::default()
+    );
+}
+
+#[test]
+fn windows_proxy_does_not_ignore_an_unreadable_registry_key() {
+    struct Denied;
+    impl CommandRunner for Denied {
+        fn run(&self, _: &str, _: &[&str]) -> anyhow::Result<String> {
+            anyhow::bail!("access denied");
+        }
+    }
+    assert!(
+        WindowsInternetSettingsProxyController::with_runner(Denied)
+            .current_proxy()
+            .is_err()
+    );
+}
+
+#[test]
 fn windows_proxy_controller_reads_current_user_proxy() {
     let controller = WindowsInternetSettingsProxyController::with_runner(WindowsRunner);
     let proxy = controller.current_proxy().unwrap().web.unwrap();

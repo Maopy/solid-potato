@@ -97,7 +97,8 @@ fn desktop_tls_only_config_disables_injection_and_rejects_ambiguous_transport_mo
         false,
     );
     // Validate the configuration consumed by the actual Python addon.
-    let result = Command::new("python3").args(["-c",
+    let result = Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .args(["-X", "utf8"]).args(["-c",
         "import ast,json,sys; line=next(l for l in sys.stdin if l.startswith('CONFIG =')); arg=ast.parse(line).body[0].value.args[0]; print(json.loads(ast.literal_eval(arg))['inject_page'])"])
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
     use std::io::Write;
@@ -183,6 +184,7 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
             live_archive_core::moderation::candidate_preview::CandidatePreviewConfig {
                 enabled: true,
                 recipient_user_id: Some("fixture-recipient".into()),
+                recipient_from_page: false,
             },
         )
         .unwrap();
@@ -193,7 +195,9 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
     let bootstrap = directory.path().join("bootstrap.js");
     std::fs::write(
         &bootstrap,
-        bridge.bootstrap_for_room(&bridge.relay_token.clone(), Some("fixture-recipient")).unwrap(),
+        bridge
+            .bootstrap_for_room(&bridge.relay_token.clone(), Some("fixture-recipient"))
+            .unwrap(),
     )
     .unwrap();
     let mut server = ProbeServer::bind(bridge).await.unwrap();
@@ -270,7 +274,9 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
         let event: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_ne!(event["event_type"], "gift.observed");
         assert_ne!(event["event_type"], "member.entered");
-        if event["event_type"] == "level.candidate" { upgrades.push(event.clone()); }
+        if event["event_type"] == "level.candidate" {
+            upgrades.push(event.clone());
+        }
         if event["event_type"] == "member.candidate" {
             assert_eq!(event["payload"]["confidence"], "candidate");
             assert_eq!(event["payload"]["live_eligible"], false);
@@ -387,8 +393,14 @@ async fn desktop_sdk_candidates_and_redacted_diagnostics_never_send() {
     assert_eq!(upgrades[0]["payload"]["room_verified"], false);
     assert_eq!(upgrades[1]["payload"]["previous_level"], 1);
     assert_eq!(upgrades[1]["payload"]["new_level"], 8);
-    assert_eq!(upgrades[1]["payload"]["recipient_user_id"], "fixture-recipient");
-    assert_eq!(upgrades[1]["payload"]["recipient_source"], "page_room_identity");
+    assert_eq!(
+        upgrades[1]["payload"]["recipient_user_id"],
+        "fixture-recipient"
+    );
+    assert_eq!(
+        upgrades[1]["payload"]["recipient_source"],
+        "page_room_identity"
+    );
     assert_eq!(upgrades[2]["payload"]["previous_level"], 1);
     assert_eq!(upgrades[2]["payload"]["new_level"], 1);
     assert_eq!(arrivals.len(), 7);
@@ -536,6 +548,7 @@ fn desktop_tabs_have_separate_bindings_and_refresh_replaces_only_the_same_tab() 
         live_archive_core::moderation::candidate_preview::CandidatePreviewConfig {
             enabled: true,
             recipient_user_id: Some("recipient".into()),
+            recipient_from_page: false,
         },
     )
     .unwrap();

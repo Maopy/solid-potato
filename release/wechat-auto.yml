@@ -22,7 +22,8 @@ storage:
 duration_seconds: 0
 candidate_preview:
   enabled: true
-  # 必须填写本地核对过的礼物接收目标 ID；空值会在启动前拒绝。
+  # 留空时从当前直播页绑定主播身份；未识别时暂停礼物感谢，仍可录屏。
+  recipient_from_page: true
   recipient_user_id: ''
 rules:
   gift:

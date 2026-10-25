@@ -37,3 +37,11 @@ for(const platform of ['douyin','wechat'])test(platform+' shows one entry, switc
   hold=true;await until(()=>oldResolve);await sdk.setModerationEnabled(false);await sdk.setModerationEnabled(true);oldResolve();await until(()=>receipts.length);
   assert.equal(writes,0);assert.equal(receipts[0].outcome,'rejected');assert.equal(sdk.getStatus().moderation_enabled,true,'late poll does not undo switch');await sdk.setModerationEnabled(false);recordingTask=null;await sdk.refreshRecording();remoteRequest='remote-request';await until(()=>recordings===2);await until(()=>reports.some(e=>e.event_type==='recording.result'));await sleep(platform==='wechat'?2100:600);assert.equal(recordings,2,'repeated poll never repeats recording');assert.equal(reports.filter(e=>e.event_type==='recording.result').length,1);sdk.dispose();assert.equal(sdk.getRecordingStatus().state,'unknown');assert.equal(launcher.children[0].style.background,'#9ca3af');
 });
+
+
+test('standalone diagnostics retain their own controls without a duplicate unified panel',()=>{
+  vm.runInNewContext(panel, {
+    BOOT: {unified_ui:false},
+    document: {body:{},createElement(){throw Error('standalone controls must not be shadowed');}}
+  });
+});

@@ -36,14 +36,18 @@ for verbose in ('', '1'):
     with contextlib.redirect_stdout(logs):
         addon['request'](flow('/api/v1/download_task/list'))
         page = flow('/web/pages/live', html=True)
+        page.response.headers.update({'cache-control': 'max-age=86400', 'etag': 'old', 'last-modified': 'old'})
         addon['response'](page)
     assert '/__assets/inject/channels.live.js' in page.response.text
+    assert page.response.headers['cache-control'] == 'no-store'
+    assert 'etag' not in page.response.headers and 'last-modified' not in page.response.headers
     assert bool(logs.getvalue()) == bool(verbose), logs.getvalue()
     probe = flow('/api/status?download_service_probe=123', html=True)
     original = probe.response.text
     with contextlib.redirect_stdout(logs):
         addon['response'](probe)
     assert probe.response.text == original
+    assert 'cache-control' not in probe.response.headers
     assert '/api/status' not in logs.getvalue()
     logs = io.StringIO()
     addon['forward_to_loopback'] = lambda *args: (502, b'{}')

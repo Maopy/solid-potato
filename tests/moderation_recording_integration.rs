@@ -53,7 +53,8 @@ else:
     .unwrap();
     let addon = p.join("combined.py");
     std::fs::write(&addon, &recording.source).unwrap();
-    let result = tokio::process::Command::new("python3")
+    let result = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .args(["-X", "utf8"])
         .arg(format!(
             "{}/tests/support/moderation_recording_proxy_driver.py",
             env!("CARGO_MANIFEST_DIR")

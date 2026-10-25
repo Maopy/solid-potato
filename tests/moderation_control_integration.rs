@@ -188,7 +188,8 @@ async fn shared_proxy_routes_multiple_platforms_and_rejects_cross_task_auth() {
     let addon = temp.path().join("controller.py");
     std::fs::write(&addon, controller.addon().unwrap()).unwrap();
     let result = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("python3")
+        std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .args(["-X", "utf8"])
             .arg(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("tests/support/moderation_controller_proxy_driver.py"),

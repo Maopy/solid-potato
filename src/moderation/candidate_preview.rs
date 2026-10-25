@@ -13,13 +13,20 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 pub struct CandidatePreviewConfig {
     pub enabled: bool,
     pub recipient_user_id: Option<String>,
+    /// Bind an empty target to the native room identity at page bootstrap.
+    pub recipient_from_page: bool,
 }
 impl CandidatePreviewConfig {
+    pub fn needs_page_identity(&self) -> bool {
+        self.recipient_from_page && self.recipient_user_id.as_deref().is_none_or(str::is_empty)
+    }
+
     pub fn validate(&self, platform: &str, injection: bool) -> Result<()> {
         if self.enabled && (platform != "wechat_channels" || !injection) {
             bail!("candidate_preview requires injected WeChat observation");
         }
         if self.enabled
+            && !self.needs_page_identity()
             && !self
                 .recipient_user_id
                 .as_deref()
@@ -31,6 +38,7 @@ impl CandidatePreviewConfig {
             .recipient_user_id
             .as_deref()
             .is_some_and(|id| !valid_user_id(id))
+            && !self.needs_page_identity()
         {
             bail!("invalid candidate_preview.recipient_user_id");
         }
@@ -168,9 +176,14 @@ impl CandidatePreview {
             return self.cancel(now, "room_ended");
         }
         if event.event_type == "level.candidate" {
-            if self.paused { return vec![]; }
+            if self.paused {
+                return vec![];
+            }
             let records = self.upgrades.ingest(now, event, &self.target);
-            return records.into_iter().map(|record| self.remember(record)).collect();
+            return records
+                .into_iter()
+                .map(|record| self.remember(record))
+                .collect();
         }
         if event.event_type == "member.candidate" {
             return if self.paused

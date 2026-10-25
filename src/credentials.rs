@@ -148,3 +148,20 @@ impl CredentialStore for MemoryCredentialStore {
 pub fn credential_key(platform: crate::model::Platform, account_id: &str) -> String {
     format!("{}:{account_id}", platform.as_str())
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn credentials_survive_reopening_the_native_store() {
+        let key = format!("windows-test-{}", uuid::Uuid::new_v4());
+        SystemCredentialStore
+            .put(&key, "temporary-test-value")
+            .unwrap();
+        let reopened = SystemCredentialStore.get(&key);
+        SystemCredentialStore.delete(&key).unwrap();
+        assert_eq!(reopened.unwrap().as_deref(), Some("temporary-test-value"));
+        assert_eq!(SystemCredentialStore.get(&key).unwrap(), None);
+    }
+}

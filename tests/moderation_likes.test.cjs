@@ -39,18 +39,18 @@ test('a repeated wall-clock boundary after rollback is not counted a second time
  s.time(12,1);await s.engine.step();s.time(12,15);await s.engine.step();assert.equal(s.actions(),1);
 });
 
-function controller(platform='wechat_channels.desktop_probe'){
- const listeners=new Map(),timers=[],saved=new Map();const keys=[];let clicks=0,room=true,moderation=false,recording=false;
- const body={tagName:'BODY',children:[],dispatchEvent:e=>keys.push({type:e.type,key:e.key,code:e.code,keyCode:e.keyCode})},node={tagName:'BUTTON',parentElement:body,isConnected:true,disabled:false,children:[],
+function controller(platform='wechat_channels.desktop_probe',extra={}){
+ const listeners=new Map(),timers=[],intervals=[],saved=new Map();const keys=[];let clicks=0,room=true,moderation=false,recording=false,now=1000;
+ const body={tagName:'BODY',children:[],dispatchEvent:e=>keys.push({type:e.type,key:e.key,code:e.code,keyCode:e.keyCode,repeat:e.repeat})},node={tagName:'BUTTON',parentElement:body,isConnected:true,disabled:false,children:[],
   matches:s=>s==='button,[role="button"]',closest:()=>null,contains:n=>n===node,getBoundingClientRect:()=>({left:10,top:10,width:20,height:20}),dispatchEvent:()=>{clicks++;}};body.children=[node];
  const document={body,activeElement:body,documentElement:{},hidden:false,querySelectorAll:q=>q.startsWith('body >')||q.startsWith('button[')||q.startsWith('div.')?[node]:[],querySelector:()=>node,elementFromPoint:()=>node,
   addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name);}};
- const window={getComputedStyle:()=>({cursor:'pointer'}),localStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)},MouseEvent:class{},KeyboardEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},WXU:{check_live_existing:()=>[null,{contact:{username:'anchor'}}]}};
+ const window={addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name);},getComputedStyle:()=>({cursor:'pointer'}),localStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)},MouseEvent:class{},KeyboardEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},WXU:{check_live_existing:()=>[null,{contact:{username:'anchor'}}]}};
  node.__reactProps$test={onClick:()=> '登录后即可点赞'};
- const context={window,document,Date,BOOT:{adapter_id:platform,room_url:'https://live.douyin.com/123'},location:{origin:'https://test',pathname:'/live'},sdk:{getStatus:()=>({stopped:false,moderation_enabled:moderation,recording})},sameRoom:()=>room,
-  setInterval:fn=>{timers.push(fn);return fn;},clearInterval:fn=>timers.splice(timers.indexOf(fn),1),setTimeout,clearTimeout};
- vm.createContext(context);vm.runInContext(source+';globalThis.controller=createLikeController({mode:"continuous",interval_ms:800,every_minutes:10,batch_count:200,missed:"catch_up_once"});',context);
- return {c:context.controller,node,document,timers,saved,keys,clicks:()=>clicks,room:v=>room=v,event:type=>{let prevented=false,stopped=false;listeners.get(type)?.({type,target:node,composedPath:()=>[node,body],preventDefault:()=>prevented=true,stopImmediatePropagation:()=>stopped=true});return {prevented,stopped};}};
+ const context={window,document,Date:{now:()=>now},BOOT:{adapter_id:platform,room_url:'https://live.douyin.com/123',like_period_ledger:extra.mode==='clock'},likeConfig:{mode:'continuous',interval_ms:800,every_minutes:10,batch_count:200,missed:'catch_up_once',...extra},location:{origin:'https://test',pathname:'/live'},sdk:{getStatus:()=>({stopped:false,moderation_enabled:moderation,recording}),claimLikePeriod:async()=>({claimed:true,period_end_ms:600000})},sameRoom:()=>room,
+  setInterval:(fn,ms)=>{timers.push(fn);intervals.push(ms);return fn;},clearInterval:fn=>timers.splice(timers.indexOf(fn),1),setTimeout,clearTimeout};
+ vm.createContext(context);vm.runInContext(source+';globalThis.controller=createLikeController(likeConfig);',context);
+ return {c:context.controller,node,document,timers,intervals,saved,keys,advance:ms=>now+=ms,clicks:()=>clicks,room:v=>room=v,event:type=>{let prevented=false,stopped=false;listeners.get(type)?.({type,target:node,composedPath:()=>[node,body],preventDefault:()=>prevented=true,stopImmediatePropagation:()=>stopped=true});return {prevented,stopped};}};
 }
 test('target picker consumes the complete selection gesture without liking, saves its selector and cleans up',async()=>{
  const s=controller();assert.equal(s.c.getStatus().enabled,false);assert.equal(s.clicks(),0);
@@ -64,13 +64,35 @@ test('likes operate while moderation and recording are off, and stop on room cha
  s.c.setEnabled(false);s.document.hidden=true;s.c.setEnabled(true);await Promise.resolve();await s.timers[0]();assert.equal(s.clicks(),1);
  s.document.hidden=false;s.room(false);await s.timers[0]();assert.equal(s.c.getStatus().enabled,false);assert.equal(s.clicks(),1);s.c.dispose();
 });
-test('Douyin uses Z keydown and keyup without a click target, and never types into an editor',async()=>{
- const s=controller('douyin.live_page');s.document.querySelectorAll=()=>[];s.c.setEnabled(true);await Promise.resolve();await s.timers[0]();
- assert.deepEqual(s.keys,[{type:'keydown',key:'z',code:'KeyZ',keyCode:90},{type:'keyup',key:'z',code:'KeyZ',keyCode:90}]);assert.equal(s.clicks(),0);
- s.c.setEnabled(false);s.document.activeElement={isContentEditable:true};s.c.setEnabled(true);await s.timers[0]();assert.equal(s.keys.length,2);assert.equal(s.c.getStatus().reason,'input_busy');
- s.document.activeElement={matches:()=>true};await s.timers[0]();assert.equal(s.keys.length,2);
- s.document.activeElement=s.document.body;await s.timers[0]();assert.equal(s.keys.length,4);
- s.c.setEnabled(false);await s.timers[0]();assert.equal(s.keys.length,4);s.c.pick();assert.equal(s.c.getStatus().picking,false);s.c.dispose();
+test('Douyin holds Z, repeats without releasing, and releases on stop, hidden page, editor focus and room exit',async()=>{
+ const s=controller('douyin.live_page');s.document.querySelectorAll=()=>[];
+ const down=repeat=>({type:'keydown',key:'z',code:'KeyZ',keyCode:90,repeat});
+ const up={type:'keyup',key:'z',code:'KeyZ',keyCode:90,repeat:false};
+ s.c.setEnabled(true);await Promise.resolve();await s.timers[0]();
+ assert.deepEqual(s.keys,[down(false)]);assert.equal(s.clicks(),0);
+ s.advance(800);await s.timers[0]();assert.deepEqual(s.keys,[down(false),down(true)]);
+ // Re-enable resets the scheduler's clock, while an existing hold is released first.
+ s.c.setEnabled(false);assert.deepEqual(s.keys,[down(false),down(true),up]);
+ s.document.activeElement={isContentEditable:true};s.c.setEnabled(true);await s.timers[0]();
+ assert.equal(s.keys.length,3);assert.equal(s.c.getStatus().reason,'input_busy');
+ s.document.activeElement=s.document.body;await s.timers[0]();assert.deepEqual(s.keys.at(-1),down(false));
+ s.document.activeElement={matches:()=>true};s.event('focusin');assert.deepEqual(s.keys.at(-1),up);
+ const count=s.keys.length;await s.timers[0]();assert.equal(s.keys.length,count);
+ s.c.setEnabled(false);s.document.activeElement=s.document.body;s.c.setEnabled(true);await Promise.resolve();
+ s.document.hidden=true;s.event('visibilitychange');assert.deepEqual(s.keys.at(-1),up);
+ s.document.hidden=false;s.c.setEnabled(false);s.c.setEnabled(true);await Promise.resolve();
+ s.room(false);await s.timers[0]();assert.deepEqual(s.keys.at(-1),up);assert.equal(s.c.getStatus().enabled,false);
+ s.c.dispose();assert.equal(s.timers.length,0);
+});
+
+test('a held Z produces repeat keydown events and one final keyup when a clock batch finishes',async()=>{
+ const s=controller('douyin.live_page');s.c.dispose();
+ // Exercise scheduler lifecycle separately from wall-clock scheduling in the controller fixture.
+ let now=0,held=false;const events=[];
+ const c={Date,config:{mode:'clock',every_minutes:10,batch_count:3,interval_ms:800,missed:'catch_up_once'},io:{now:()=>now,inRoom:()=>true,visible:()=>true,claim:async()=>({claimed:true,period_end_ms:600000}),action:async()=>{events.push(held?'repeat':'down');held=true;return true;},release:()=>{if(held)events.push('up');held=false;}}};
+ vm.createContext(c);vm.runInContext(source+';globalThis.engine=createLikeScheduler(config,io);',c);
+ c.engine.setEnabled(true);await c.engine.step();now+=800;await c.engine.step();now+=800;await c.engine.step();
+ assert.deepEqual(events,['down','repeat','repeat','up']);assert.equal(c.engine.getStatus().remaining,0);
 });
 
 test('WeChat skips clicks while any text editor owns focus and resumes without altering the editor',async()=>{
@@ -105,4 +127,20 @@ test('backend failure never falls back to local likes, and disabling during a cl
 test('the confirmed Channels native cheers selector is unique and independent of screen coordinates',()=>{
  const node={};let candidates=[node];const c={doc:{querySelectorAll:q=>q==='.controls__ft .cheers__wrp .live-opr__btn'?candidates:[]},win:{}};
  vm.createContext(c);vm.runInContext(source+';globalThis.find=()=>findWechatLikeTarget(doc,win,()=>true);',c);assert.equal(c.find(),node);candidates=[node,{}];assert.equal(c.find(),null);
+});
+
+test('Douyin clock batches hold Z at keyboard repeat speed, independently of mouse interval',async()=>{
+ const s=controller('douyin.live_page',{mode:'clock',interval_ms:800});
+ assert.equal(s.intervals[0],33);
+ s.c.setEnabled(true);await Promise.resolve();await Promise.resolve();await s.timers[0]();
+ for(let i=1;i<200;i++){s.advance(33);await s.timers[0]();}
+ assert.equal(s.keys.length,201);
+ assert.equal(s.keys[0].type,'keydown');assert.equal(s.keys[0].repeat,false);
+ assert.ok(s.keys.slice(1,200).every(e=>e.type==='keydown'&&e.repeat===true));
+ assert.equal(s.keys[200].type,'keyup');assert.equal(s.clicks(),0);
+ assert.equal(s.c.getStatus().total_attempts,200);assert.equal(s.c.getStatus().remaining,0);
+ assert.equal(s.c.getStatus().key_held,false);
+ s.advance(3300);await s.timers[0]();assert.equal(s.keys.length,201);
+ s.c.dispose();
+ const wx=controller();assert.equal(wx.intervals[0],800);wx.c.dispose();
 });

@@ -63,7 +63,11 @@ pub enum DirectoryState {
 pub struct ProcessDoctorProbe;
 impl DoctorProbe for ProcessDoctorProbe {
     fn command_version(&self, command: &Path) -> Result<String, String> {
-        let version_flag = if command.file_name().and_then(|name| name.to_str()) == Some("ffmpeg") {
+        let version_flag = if command
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("ffmpeg"))
+        {
             // FFmpeg accepts the single-dash form. In particular, FFmpeg 9
             // prints its version for `--version` but then exits with an error.
             "-version"

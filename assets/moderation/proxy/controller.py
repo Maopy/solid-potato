@@ -27,7 +27,7 @@ def route_for(flow):
     return next((r for r in ROUTES if flow.request.host == r['host']), None)
 
 def loader(matches):
-    choices = [{**{k:r[k] for k in ('id','label','account','prefix','host','path')}, 'room_profiles':r.get('room_profiles',False)} for r in matches]
+    choices = [{**{k:r[k] for k in ('id','label','account','prefix','host','path')}, 'room_profiles':r.get('room_profiles',False), 'wait_for_room_identity':r.get('wait_for_room_identity',False)} for r in matches]
     # TextContent and fixed generated paths keep labels out of HTML/JS parsing.
     return r"""(() => {
       if (window.__liveArchiveModerationV1 || document.getElementById('live-archive-task-picker')) return;
@@ -45,7 +45,7 @@ def loader(matches):
             }
           }catch(_){}
           const valid=typeof identity==='string'&&identity.trim()===identity&&identity.length>0&&identity.length<=256&&!/[\u0000-\u0020\u007f-\u009f]/.test(identity);
-          if(choice.room_profiles&&!valid&&attempts++<50){setTimeout(connect,200);return;}
+          if((choice.room_profiles||choice.wait_for_room_identity)&&!valid&&attempts++<50){setTimeout(connect,200);return;}
           const s=document.createElement('script');s.src=choice.prefix+'bootstrap.js'+(valid?'?room_identity='+encodeURIComponent(identity):'');
           if(nonce)s.nonce=nonce;document.head.appendChild(s);
         };connect();

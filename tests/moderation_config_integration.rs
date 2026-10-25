@@ -277,7 +277,7 @@ fn yaml_rule_switches_isolate_gifts_joined_and_each_upgrade_kind() {
 }
 
 #[test]
-fn release_configs_enable_batched_welcomes_and_require_wechat_target() {
+fn release_configs_enable_batched_welcomes_and_bind_wechat_page_target() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let douyin = ModerationConfig::load(&root.join("release/douyin.yml")).unwrap();
     assert_eq!(douyin.mode, Mode::FillOnly);
@@ -291,7 +291,12 @@ fn release_configs_enable_batched_welcomes_and_require_wechat_target() {
         Some("感谢礼物飘屏")
     );
     let wechat_template = root.join("release/wechat.yml");
-    assert!(ModerationConfig::load(&wechat_template).is_err());
+    assert!(
+        ModerationConfig::load(&wechat_template)
+            .unwrap()
+            .candidate_preview
+            .needs_page_identity()
+    );
     let dir = tempfile::tempdir().unwrap();
     let selected = dir.path().join("wechat.yml");
     fs::copy(

@@ -4,13 +4,14 @@ const createLikeScheduler=(config,io)=>{
   const claimed=new Set();
   const nextAfter=now=>{const d=new Date(now);d.setMinutes((Math.floor(d.getMinutes()/config.every_minutes)+1)*config.every_minutes,0,0);return d.getTime();};
   const begin=()=>{remaining=config.batch_count;batchAttempts=0;batches++;};
-  const setEnabled=value=>{epoch++;enabled=!!value;remaining=0;queued=false;lastAction=-Infinity;lastNow=io.now();initialClaim=enabled;nextMark=enabled&&config.mode==='clock'?(io.claim?lastNow:nextAfter(lastNow)):null;reason=enabled?null:'disabled';};
+  const release=()=>io.release?.();
+  const setEnabled=value=>{release();epoch++;enabled=!!value;remaining=0;queued=false;lastAction=-Infinity;lastNow=io.now();initialClaim=enabled;nextMark=enabled&&config.mode==='clock'?(io.claim?lastNow:nextAfter(lastNow)):null;reason=enabled?null:'disabled';};
   const step=async()=>{
     if(!enabled||busy)return;
     if(!io.inRoom()){setEnabled(false);reason='room_changed';return;}
     const now=io.now();
-    if(now<lastNow-1000){remaining=0;queued=false;nextMark=config.mode==='clock'?(io.claim?now:nextAfter(now)):null;lastAction=-Infinity;}lastNow=now;
-    if(!io.visible()){reason='page_hidden';return;}
+    if(now<lastNow-1000){release();remaining=0;queued=false;nextMark=config.mode==='clock'?(io.claim?now:nextAfter(now)):null;lastAction=-Infinity;}lastNow=now;
+    if(!io.visible()){release();reason='page_hidden';return;}
     if(config.mode==='clock'){
       if(now>=nextMark){
         if(io.claim){
@@ -29,15 +30,15 @@ const createLikeScheduler=(config,io)=>{
           if(!claimed.has(slot)&&(config.missed==='catch_up_once'||late<=3000)){claimed.add(slot);if(claimed.size>128)claimed.delete(claimed.values().next().value);if(!remaining)begin();else if(batchAttempts>0)queued=true;}
         }
       }
-      if(!remaining){reason='waiting_clock';return;}
+      if(!remaining){release();reason='waiting_clock';return;}
     }
     if(now-lastAction<config.interval_ms)return;
     busy=true;const generation=epoch;
     try{
       if(await io.action(()=>enabled&&epoch===generation&&io.inRoom()&&io.visible())){
         total++;lastAction=io.now();reason=null;
-        if(enabled&&epoch===generation&&config.mode==='clock'){remaining--;batchAttempts++;if(!remaining&&queued){queued=false;begin();}}
-      }else reason=io.reason?.()||'target_unavailable';
+        if(enabled&&epoch===generation&&config.mode==='clock'){remaining--;batchAttempts++;if(!remaining&&queued){queued=false;begin();}else if(!remaining)release();}
+      }else {release();reason=io.reason?.()||'target_unavailable';}
     }catch(_){setEnabled(false);reason='click_error';}
     finally{busy=false;}
   };
@@ -71,6 +72,10 @@ const findWechatLikeTarget=(doc,win,isVisible)=>{
 };
 const createLikeController=config=>{
   const isDouyin=BOOT.adapter_id==='douyin.live_page';
+  // Douyin's native Z handler consumes keyboard auto-repeat events. It does not
+  // start its own repeat timer on the first keydown. Keep this cadence separate
+  // from the WeChat mouse-click interval, and release only when the hold ends.
+  const scheduleConfig=isDouyin?{...config,interval_ms:33}:config;
   const key='live-archive-like-target:'+location.origin+location.pathname;
   let selector=config.target_selector||'',picked=null,picking=false,selectionTimer=null,lastReason=null,roomIdentity=null;
   const currentIdentity=()=>{if(isDouyin)return BOOT.room_url;try{const [error,profile]=window.WXU?.check_live_existing?.({silence:true})||[];if(error)return null;return profile?.username||profile?.contact?.username||profile?.author?.username||null;}catch(_){return null;}};
@@ -91,16 +96,20 @@ const createLikeController=config=>{
     if(nodes.length!==1){lastReason=nodes.length?'target_not_unique':'target_not_found';return null;}
     lastReason=null;return nodes[0];
   };
+  let heldNode=null;
+  const keyOptions={key:'z',code:'KeyZ',keyCode:90,which:90,bubbles:true,cancelable:true};
+  const releaseZ=()=>{const node=heldNode;heldNode=null;if(node)node.dispatchEvent(new window.KeyboardEvent('keyup',{...keyOptions,repeat:false}));};
+  const editorFocused=()=>{const n=document.activeElement;return n?.isContentEditable||n?.matches?.('input,textarea,select,iframe,[role="textbox"]')||n?.closest?.('[contenteditable="true"],[role="textbox"]');};
   const gesture=async active=>{
     if(!active())return false;
     const focused=document.activeElement;
-    if(focused?.isContentEditable||focused?.matches?.('input,textarea,select,iframe,[role="textbox"]')||focused?.closest?.('[contenteditable="true"],[role="textbox"]')){lastReason='input_busy';return false;}
+    if(editorFocused()){lastReason='input_busy';return false;}
     if(isDouyin){
-      const node=focused||document.body;
+      const node=document.body;
       if(!node||typeof window.KeyboardEvent!=='function'){lastReason='keyboard_unavailable';return false;}
-      const options={key:'z',code:'KeyZ',keyCode:90,which:90,bubbles:true,cancelable:true,repeat:false};
-      try{node.dispatchEvent(new window.KeyboardEvent('keydown',options));}
-      finally{node.dispatchEvent(new window.KeyboardEvent('keyup',options));}
+      if(heldNode&&heldNode!==node)releaseZ();
+      const repeat=heldNode===node;heldNode=node;
+      node.dispatchEvent(new window.KeyboardEvent('keydown',{...keyOptions,repeat}));
       lastReason=null;return true;
     }
     const node=target();if(!node)return false;
@@ -108,7 +117,10 @@ const createLikeController=config=>{
     click();
     return true;
   };
-  const engine=createLikeScheduler(config,{now:()=>Date.now(),inRoom:()=>sameRoom()&&!sdk.getStatus().stopped&&(!roomIdentity||currentIdentity()===roomIdentity),visible:()=>!document.hidden&&!picking,claim:isDouyin&&BOOT.like_period_ledger?()=>sdk.claimLikePeriod():undefined,action:gesture,reason:()=>lastReason});
+  const engine=createLikeScheduler(scheduleConfig,{now:()=>Date.now(),inRoom:()=>sameRoom()&&!sdk.getStatus().stopped&&(!roomIdentity||currentIdentity()===roomIdentity),visible:()=>!document.hidden&&!picking&&(!isDouyin||!document.hasFocus||document.hasFocus()),claim:isDouyin&&BOOT.like_period_ledger?()=>sdk.claimLikePeriod():undefined,action:gesture,release:releaseZ,reason:()=>lastReason});
+  const releaseOnFocus=()=>{if(editorFocused())releaseZ();};
+  const releaseOnHidden=()=>{if(document.hidden)releaseZ();};
+  if(isDouyin){document.addEventListener('focusin',releaseOnFocus,true);document.addEventListener('visibilitychange',releaseOnHidden);window.addEventListener('blur',releaseZ);window.addEventListener('pagehide',releaseZ);}
   const selectionEvents=['pointerdown','pointerup','mousedown','mouseup','click','dblclick'];
   const stopPicking=()=>{picking=false;clearTimeout(selectionTimer);for(const event of selectionEvents)document.removeEventListener(event,select,true);document.removeEventListener('keydown',escape,true);};
   const escape=e=>{if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();stopPicking();}};
@@ -146,9 +158,9 @@ const createLikeController=config=>{
     for(const event of selectionEvents)document.addEventListener(event,select,true);
     document.addEventListener('keydown',escape,true);
   };
-  const timer=setInterval(()=>engine.step(),Math.min(config.interval_ms,1000));
+  const timer=setInterval(()=>engine.step(),Math.min(scheduleConfig.interval_ms,1000));
   return {setEnabled:value=>{if(value){roomIdentity=currentIdentity();if(!roomIdentity)throw Error('等待当前直播间资料就绪');if(picking)throw Error('请先完成点赞按钮定位');if(isDouyin&&config.mode==='clock'&&!BOOT.like_period_ledger)throw Error('请升级并连接支持时段记录的新版后台');if(!isDouyin&&!target())throw Error('未识别到原生点赞按钮，请重新打开直播页');}engine.setEnabled(value);if(value)void engine.step();},pick,
-    getStatus:()=>({...engine.getStatus(),picking,target_ready:isDouyin||!!target(),target_reason:lastReason,selector: isDouyin?null:selector}),
-    dispose:()=>{stopPicking();clearInterval(timer);engine.dispose();}};
+    getStatus:()=>({...engine.getStatus(),picking,key_held:!!heldNode,repeat_interval_ms:isDouyin?33:null,target_ready:isDouyin||!!target(),target_reason:lastReason,selector: isDouyin?null:selector}),
+    dispose:()=>{stopPicking();clearInterval(timer);engine.dispose();if(isDouyin){document.removeEventListener('focusin',releaseOnFocus,true);document.removeEventListener('visibilitychange',releaseOnHidden);window.removeEventListener('blur',releaseZ);window.removeEventListener('pagehide',releaseZ);}}};
 };
 if(typeof BOOT!=='undefined'&&BOOT.likes?.enabled){sdk.likes=createLikeController(BOOT.likes);sdk.onDispose(()=>sdk.likes.dispose());}

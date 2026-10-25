@@ -77,7 +77,10 @@ pub fn start(directory: &Path, port: u16, inspect_tls: bool) -> Result<Box<dyn P
             WindowsCertUtilCertificateController, WindowsInternetSettingsProxyController,
         };
         (
-            WindowsInternetSettingsProxyController::new(),
+            super::proxy_watchdog::RecoveryController::new(
+                WindowsInternetSettingsProxyController::new(),
+                "Windows Internet Settings".into(),
+            ),
             WindowsCertUtilCertificateController::new(certificate),
         )
     };

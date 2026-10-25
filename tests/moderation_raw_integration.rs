@@ -132,7 +132,8 @@ async fn exercise(platform: &str, enabled: bool, task: bool) {
         assert_eq!(row.2, row.3, "all chunks must be durable");
     }
     // Decode persisted chunks, rather than only checking the browser counters.
-    let out = Command::new("python3")
+    let out = Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .args(["-X", "utf8"])
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/read_moderation_raw.py"))
         .arg(&db)
         .arg("--contains")
@@ -210,7 +211,8 @@ async fn raw_upload_through_shipped_same_origin_proxy_reaches_durable_journal() 
     std::fs::write(&addon, render_addon(&scope, s.address, &relay)).unwrap();
     std::fs::write(&cfg, serde_json::to_vec(&boot).unwrap()).unwrap();
     let result = tokio::task::spawn_blocking(move || {
-        Command::new("python3")
+        Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .args(["-X", "utf8"])
             .arg(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("tests/support/moderation_proxy_route_driver.py"),

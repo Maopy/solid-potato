@@ -3,13 +3,15 @@
 from pathlib import Path
 import argparse
 import hashlib
+import platform
 import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 
-RELEASE_NAME = re.compile(r'live-archive-moderation-(\d+)\.(\d+)\.(\d+)-macos-arm64')
+RELEASE_NAME = re.compile(r'live-archive-moderation-(\d+)\.(\d+)\.(\d+)-(macos|windows|linux)-(arm64|x64)')
 CONFIGS = ['douyin.yml', 'wechat.yml', 'wechat-observe.yml', 'douyin-auto.yml',
            'wechat-auto.yml', 'controller.yml', 'douyin-second.yml',
            'gift-wording.example.yml', 'nickname-mapping.yml', 'timed-messages.example.yml', 'keyword-replies.example.yml', 'recording.example.yml', 'likes.example.yml', 'unified.yml']
@@ -17,7 +19,7 @@ SCRIPTS = ['run-douyin.sh', 'run-wechat.sh', 'run-douyin-auto.sh',
            'run-wechat-auto.sh', 'run-controller.sh', 'run.sh', '启动场控.command']
 
 
-def previous_config(dist, version):
+def previous_config(dist, version, target=None):
     """Pick the latest older semantic version, never an unrelated/future folder."""
     current = tuple(map(int, version.split('.')))
     if not dist.is_dir():
@@ -26,10 +28,12 @@ def previous_config(dist, version):
     for directory in dist.iterdir():
         match = RELEASE_NAME.fullmatch(directory.name)
         if match and directory.is_dir() and (directory / 'config').is_dir():
-            candidate = tuple(map(int, match.groups()))
+            if target and '-'.join(match.groups()[3:]) != target:
+                continue
+            candidate = tuple(map(int, match.groups()[:3]))
             if candidate < current:
                 candidates.append((candidate, directory / 'config'))
-    return max(candidates)[1] if candidates else None
+    return max(candidates, key=lambda item: (item[0], str(item[1])))[1] if candidates else None
 
 
 def inherit_config(source, output, validator, keep_backup=False):
@@ -60,8 +64,8 @@ def inherit_config(source, output, validator, keep_backup=False):
 def migrate_unified(directory):
     """Enable the new Douyin transport only when the old config has no preference."""
     path = directory / "unified.yml"
-    if path.exists() and not re.search(r"^douyin_userscript\s*:", path.read_text(), re.M):
-        with path.open("a") as stream:
+    if path.exists() and not re.search(r"^douyin_userscript\s*:", path.read_text(encoding='utf-8'), re.M):
+        with path.open("a", encoding="utf-8") as stream:
             stream.write("\n# 抖音用户脚本接入；视频号继续使用代理。\ndouyin_userscript:\n  enabled: true\n  port: 2025\n  key_file: ../../.live-archive-userscript-key\n")
 
 
@@ -69,12 +73,12 @@ def migrate_recording(directory):
     """Expose the external default without overwriting any recording preference."""
     example = directory / 'recording.example.yml'
     if example.exists():
-        text = example.read_text().replace('  # output_dir: ../data/recordings', '  # 默认系统下载文件夹/直播录屏；自定义请填写绝对路径。\n  # output_dir: /Volumes/Media/直播录屏')
-        example.write_text(text)
+        text = example.read_text(encoding='utf-8').replace('  # output_dir: ../data/recordings', '  # 默认系统下载文件夹/直播录屏；自定义请填写绝对路径。\n  # output_dir: /Volumes/Media/直播录屏')
+        example.write_text(text, encoding='utf-8')
     for name in ['unified.yml', 'controller.yml']:
         path = directory / name
-        if path.exists() and not re.search(r'^recording\s*:', path.read_text(), re.M):
-            with path.open('a') as stream:
+        if path.exists() and not re.search(r'^recording\s*:', path.read_text(encoding='utf-8'), re.M):
+            with path.open('a', encoding='utf-8') as stream:
                 stream.write('\n# 录屏默认保存到系统下载文件夹/直播录屏；自定义请填写绝对路径。\nrecording:\n  output_dir: null\n')
 
 
@@ -82,51 +86,84 @@ def migrate_likes(directory):
     """Expose requested presets only when the room has no existing preference."""
     for name, mode in [('douyin-auto.yml', 'clock'), ('wechat-auto.yml', 'continuous')]:
         path = directory / name
-        if path.exists() and not re.search(r'^likes\s*:', path.read_text(), re.M):
-            with path.open('a') as stream:
+        if path.exists() and not re.search(r'^likes\s*:', path.read_text(encoding='utf-8'), re.M):
+            with path.open('a', encoding='utf-8') as stream:
                 stream.write('\n# 点赞独立于场控和录制；页面加载后默认关闭，在面板手动开启。\n'
                              f'likes:\n  enabled: true\n  mode: {mode}\n  interval_ms: 800\n'
                              '  every_minutes: 10\n  batch_count: 200\n'
                              '  missed: catch_up_once\n  target_selector: null\n')
 
 
+def migrate_wechat_recipient(directory):
+    """Empty legacy templates can bind the native page identity without a fake ID."""
+    for name in ['wechat.yml', 'wechat-auto.yml']:
+        path = directory / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding='utf-8')
+        if re.search(r'^  recipient_from_page:', text, re.M):
+            continue
+        if re.search(r"^  recipient_user_id: *(?:''|\"\") *(?:#.*)?$", text, re.M):
+            text = re.sub(r'^(candidate_preview:[ \t]*\n)',
+                          r'\1  recipient_from_page: true\n', text, count=1, flags=re.M)
+            text = text.replace('必须填写本地核对过的礼物接收目标 ID；空值会在启动前拒绝。',
+                                '留空时从当前直播页绑定主播身份；未识别时暂停礼物感谢，仍可录屏。')
+            path.write_text(text, encoding='utf-8')
+
+
 def validate_configs(binary, directory):
     migrate_unified(directory)
     migrate_recording(directory)
     migrate_likes(directory)
+    migrate_wechat_recipient(directory)
     example = directory / 'timed-messages.example.yml'
     if example.exists():
-        text = example.read_text()
+        text = example.read_text(encoding='utf-8')
         if not re.search(r'^  min_comments\s*:', text, re.M):
             text = re.sub(r'^(timed_messages:\s*\n)', r'\1  # 时间与评论条数同时满足才发；0 保持只按时间，按需改为 5 等数值。\n  min_comments: 0\n', text, count=1, flags=re.M)
-            example.write_text(text)
+            example.write_text(text, encoding='utf-8')
     for name in ['douyin.yml', 'douyin-auto.yml', 'douyin-second.yml',
                  'wechat-observe.yml', 'wechat.yml', 'wechat-auto.yml']:
         path = directory / name
         if not path.exists():
             continue
         result = subprocess.run([binary, 'moderation', 'check', '--config', path],
-                                capture_output=True, text=True)
-        placeholder = name in ['wechat.yml', 'wechat-auto.yml'] and bool(re.search(
-            r"^\s*recipient_user_id:\s*(?:''|\"\")\s*(?:#.*)?$", path.read_text(), re.M))
-        if result.returncode and not (placeholder and 'recipient_user_id' in result.stderr):
+                                capture_output=True, text=True, encoding='utf-8')
+        if result.returncode:
             raise RuntimeError(f'Configuration check failed: {name}\n{result.stderr}')
     for name in ['controller.yml','unified.yml']:
         controller=directory/name
         if controller.exists():
-            subprocess.run([binary, 'moderation', 'check-controller', '--config', controller],check=True)
+            subprocess.run([binary, 'moderation', 'check-controller', '--config', controller], check=True)
 
 
-def release_assets(repo, version):
+
+def host_target():
+    system = {'Darwin': 'macos', 'Windows': 'windows', 'Linux': 'linux'}.get(platform.system())
+    machine = platform.machine().lower()
+    arch = {'amd64': 'x64', 'x86_64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}.get(machine)
+    if not system or not arch:
+        raise ValueError(f'Unsupported release host: {platform.system()} {machine}')
+    return f'{system}-{arch}'
+
+
+def release_assets(repo, version, target='macos-arm64', binary=None):
     assets = {
-        'live-archive-core': repo / 'target/release/live-archive-core',
+        ('live-archive-core.exe' if target.startswith('windows-') else 'live-archive-core'):
+            binary or repo / 'target/release' / ('live-archive-core.exe' if target.startswith('windows-') else 'live-archive-core'),
         'LICENSE': repo / 'LICENSE',
         'tools/read_moderation_raw.py': repo / 'tools/read_moderation_raw.py',
+        'tools/firered_asr_worker.py': repo / 'tools/firered_asr_worker.py',
+        'tools/firered_asr_launcher.py': repo / 'tools/firered_asr_launcher.py',
+        'tools/download_firered_model.py': repo / 'tools/download_firered_model.py',
         'THIRD_PARTY_NOTICES.md': repo / 'THIRD_PARTY_NOTICES.md',
         '使用说明.md': repo / f'docs/moderation-release-{version}.md',
     }
     assets.update({f'config/{name}': repo / 'release' / name for name in CONFIGS})
-    assets.update({name: repo / 'release' / name for name in SCRIPTS})
+    scripts = ['run.cmd', '启动场控.cmd'] if target.startswith('windows-') else SCRIPTS
+    assets.update({name: repo / 'release' / name for name in scripts})
+    if target.startswith('windows-'):
+        assets['Windows使用说明.md'] = repo / 'docs/windows.md'
     for name in ['moderation-release-0.2.0.md', 'moderation-release-0.2.1.md',
                  'moderation-release-0.2.2.md', 'moderation-release-0.2.3.md',
                  'moderation-release-0.2.4.md', 'moderation-release-0.2.5.md',
@@ -143,17 +180,23 @@ def release_assets(repo, version):
     return assets
 
 
-def archive_release(output, assets):
+def archive_release(output, assets, target=None):
     # Inherit custom/nested config files as well as the standard filenames.
     names = set(assets)
-    names.update(str(path.relative_to(output)) for path in (output / 'config').rglob('*')
+    names.update(path.relative_to(output).as_posix() for path in (output / 'config').rglob('*')
                  if path.is_file() or path.is_symlink())
-    archive = output.parent / f'{output.name}.tar.gz'
-    with tarfile.open(archive, 'w:gz') as bundle:
-        for relative in sorted(names):
-            bundle.add(output / relative, arcname=f'{output.name}/{relative}', recursive=False)
+    if target and target.startswith('windows-'):
+        archive = output.parent / f'{output.name}.zip'
+        with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
+            for relative in sorted(names):
+                bundle.write(output / relative, arcname=f'{output.name}/{relative}')
+    else:
+        archive = output.parent / f'{output.name}.tar.gz'
+        with tarfile.open(archive, 'w:gz') as bundle:
+            for relative in sorted(names):
+                bundle.add(output / relative, arcname=f'{output.name}/{relative}', recursive=False)
     checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
-    Path(str(archive) + '.sha256').write_text(f'{checksum}  {archive.name}\n')
+    Path(str(archive) + '.sha256').write_text(f'{checksum}  {archive.name}\n', encoding='utf-8')
     print(archive)
     print(f'SHA256: {checksum}')
 
@@ -163,14 +206,16 @@ def main():
     parser.add_argument('--inherit-config-only', action='store_true',
                         help='repair this existing release and rebuild its archive; keep a config backup')
     parser.add_argument('--config-from', type=Path, help='inherit the config directory of the currently running release')
+    parser.add_argument('--target', default=host_target(), choices=[f'{os}-{arch}' for os in ['macos', 'windows', 'linux'] for arch in ['arm64', 'x64']])
+    parser.add_argument('--binary', type=Path, help='path to the built native CLI (for custom Cargo target directories)')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
-    version = re.search(r'^version = "([^"]+)"', (repo / 'Cargo.toml').read_text(), re.M)[1]
-    output = repo / 'dist' / f'live-archive-moderation-{version}-macos-arm64'
-    source = args.config_from.resolve() if args.config_from else previous_config(output.parent, version)
+    version = re.search(r'^version = "([^"]+)"', (repo / 'Cargo.toml').read_text(encoding='utf-8'), re.M)[1]
+    output = repo / 'dist' / f'live-archive-moderation-{version}-{args.target}'
+    source = args.config_from.resolve() if args.config_from else previous_config(output.parent, version, args.target)
     if source is not None and not source.is_dir():
         raise SystemExit(f'Config source does not exist: {source}')
-    assets = release_assets(repo, version)
+    assets = release_assets(repo, version, args.target, args.binary.resolve() if args.binary else None)
     if args.inherit_config_only:
         if not (output / 'config').is_dir() or source is None:
             raise SystemExit('An existing release and a previous config directory are required')
@@ -184,8 +229,8 @@ def main():
             shutil.copy2(original, destination)
             if relative.endswith(('.sh','.command')) or relative == 'live-archive-core':
                 destination.chmod(0o755)
-    binary = output / 'live-archive-core'
-    assert subprocess.check_output([binary, '--version'], text=True).strip().endswith(version)
+    binary = output / ('live-archive-core.exe' if args.target.startswith('windows-') else 'live-archive-core')
+    assert subprocess.check_output([binary, '--version'], text=True, encoding='utf-8').strip().endswith(version)
     if source is not None:
         backup = inherit_config(source, output, lambda directory: validate_configs(binary, directory),
                                 keep_backup=args.inherit_config_only)
@@ -194,7 +239,7 @@ def main():
             print(f'Previous destination config backup: {backup}')
     else:
         validate_configs(binary, output / 'config')
-    archive_release(output, assets)
+    archive_release(output, assets, args.target)
 
 
 if __name__ == '__main__':

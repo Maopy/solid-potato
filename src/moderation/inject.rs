@@ -35,10 +35,11 @@ pub fn render_addon_with_prefix(
     let config = json!({"host":scope.room_url.host_str(),"room_path":scope.room_url.path(),"prefix":prefix,"bridge_host":bridge.ip().to_string(),"bridge_port":bridge.port(),"relay_token":relay_token,"inject_page":inject_page});
     let template = include_str!("../../assets/moderation/proxy/addon.py");
     // JSON decoded from a JSON string literal also handles Python booleans.
-    template.replace(
+    let addon = template.replace(
         "__CONFIG_JSON_STRING__",
         &serde_json::to_string(&config.to_string()).expect("serializing config string"),
-    )
+    );
+    format!("{}\n{addon}", include_str!("../../assets/moderation/proxy/windows_asyncio.py"))
 }
 
 pub fn ignore_hosts(scope: &ProbeScope) -> Result<String> {
@@ -152,7 +153,31 @@ fn process_exists(pid: u32) -> Result<bool> {
         _ => bail!("cannot verify existing probe PID; lock preserved"),
     }
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn process_exists(pid: u32) -> Result<bool> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    if pid == 0 {
+        bail!("invalid existing probe PID; cannot safely recover");
+    }
+    // Query only; access denied is treated conservatively as a live owner.
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if process.is_null() {
+        return Ok(
+            std::io::Error::last_os_error().raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32)
+        );
+    }
+    let status = unsafe { WaitForSingleObject(process, 0) };
+    unsafe { CloseHandle(process) };
+    match status {
+        WAIT_OBJECT_0 => Ok(false),
+        WAIT_TIMEOUT => Ok(true),
+        _ => bail!("cannot verify existing probe PID; lock preserved"),
+    }
+}
+#[cfg(not(any(unix, windows)))]
 fn process_exists(_pid: u32) -> Result<bool> {
     bail!(
         "existing legacy probe lock requires manual process verification on this platform; lock preserved"
@@ -339,12 +364,10 @@ impl ProbeSidecar {
     }
 
     pub async fn stop(&mut self) -> Result<()> {
-        if let Some(mut child) = self.child.take() {
-            if child.try_wait()?.is_none() {
-                child.kill().await?;
-            }
-            child.wait().await?;
+        if let Some(child) = self.child.as_mut() {
+            crate::child_process::stop_proxy_child(child).await?;
         }
+        self.child.take();
         if self.lease.is_some() && self.addon_path.exists() {
             fs::remove_file(&self.addon_path)?;
         }
@@ -355,7 +378,9 @@ impl ProbeSidecar {
 
 impl Drop for ProbeSidecar {
     fn drop(&mut self) {
-        // Child uses kill_on_drop. Stop explicitly before dropping in normal flow.
+        if let Some(child) = self.child.as_mut() {
+            crate::child_process::drop_proxy_child(child);
+        }
         self.child.take();
         if self.lease.is_some() {
             let _ = fs::remove_file(&self.addon_path);
@@ -396,13 +421,15 @@ fcntl.flock(guard,fcntl.LOCK_EX)
 print('ready',flush=True)
 sys.stdin.read()
 "#;
-        let mut child = std::process::Command::new("python3")
-            .args(["-c", script])
-            .arg(dir.path())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child =
+            std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+                .args(["-X", "utf8"])
+                .args(["-c", script])
+                .arg(dir.path())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
         let mut line = String::new();
         std::io::BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut line)
@@ -435,5 +462,26 @@ sys.stdin.read()
         fs::write(&path, "unknown").unwrap();
         assert!(DirectoryLease::acquire(dir.path()).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "unknown");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn recovers_exited_owner_and_keeps_live_owner_lock() {
+        assert!(process_exists(std::process::id()).unwrap());
+        assert!(!process_exists(u32::MAX).unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("moderation-probe.lock");
+        fs::write(&pid_path, u32::MAX.to_string()).unwrap();
+        let lease = DirectoryLease::acquire(dir.path()).unwrap();
+        assert!(DirectoryLease::acquire(dir.path()).is_err());
+        drop(lease);
+        assert!(!pid_path.exists());
+        fs::write(&pid_path, std::process::id().to_string()).unwrap();
+        assert!(DirectoryLease::acquire(dir.path()).is_err());
+        assert!(pid_path.exists());
     }
 }

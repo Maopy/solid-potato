@@ -1,5 +1,6 @@
 // One visible control entry on both platforms; backend ACK governs the switch.
 const mountModerationPanel=()=>{
+  if(BOOT.unified_ui===false)return;
   if(!document.body||typeof document.createElement!=='function'||typeof document.getElementById!=='function'||document.getElementById('live-archive-assistant'))return;
   const box=document.createElement('section');box.id='live-archive-assistant';
   Object.assign(box.style,{position:'fixed',right:'20px',top:'16px',zIndex:'2147483647',background:'#20232b',color:'#e5e7eb',padding:'12px',border:'1px solid #3b4250',borderRadius:'8px',font:'14px sans-serif',maxWidth:'320px',boxShadow:'0 8px 28px #0006'});
@@ -70,6 +71,7 @@ const mountModerationPanel=()=>{
     toggle.title=s.moderation_enabled?'场控已开启，点击关闭':'场控已关闭，点击开启';toggle.setAttribute('aria-label',toggle.title);
     toggle.setAttribute('aria-checked',String(s.moderation_enabled));toggle.disabled=!s.connected||s.stopped||s.draining;
     info.textContent=[s.stopped?'连接已停止，请刷新直播页':!s.connected?'正在连接直播页':'',s.bridge_error||'',s.fill?.bridge?.blocked?'发送未确认，已暂停后续发送':''].filter(Boolean).join('\n');
+    if(BOOT.recipient_pending)info.textContent+='\n尚未识别视频号主播身份，礼物感谢暂停；直播加载完成后请刷新直播页。录屏仍可使用。';
     if(BOOT.adapter_id==='douyin.live_page'){
       const counts=s.delivery?.observed||s.delivery?.generated||{},comments=counts['chat.received']||0,gifts=counts['gift.observed']||0;
       info.textContent+='\n已采集：评论 '+comments+' · 礼物 '+gifts;
@@ -105,7 +107,7 @@ const mountModerationPanel=()=>{
       likeDot.style.background=liking.enabled?'#4ade80':'#9ca3af';
       like.disabled=s.stopped||liking.picking;
       const names={waiting_clock:'等待整点',page_hidden:'页面隐藏，暂停操作',target_not_found:'未识别到原生点赞按钮',target_not_unique:'发现多个点赞控件',target_unverified:'点赞控件待确认',input_busy:'评论框正在编辑，暂停点赞',keyboard_unavailable:'快捷键不可用',backend_unavailable:'等待后台确认本时段点赞记录',click_error:'点击异常，已停止'};
-      info.textContent+='\n点赞：'+(liking.picking?'请单击原页面的点赞控件（此次不点赞，Esc 取消）':liking.enabled?(names[liking.reason]||'运行中'):'已关闭');
+      info.textContent+='\n点赞：'+(liking.picking?'请单击原页面的点赞控件（此次不点赞，Esc 取消）':liking.enabled?(names[liking.reason]||(liking.key_held?'长按 Z 连赞中':'运行中')):'已关闭');
       if(liking.enabled&&liking.mode==='clock')info.textContent+=' · 本批剩余 '+liking.remaining+(liking.next_at_ms?' · 下次 '+new Date(liking.next_at_ms).toLocaleTimeString(): '');
       info.textContent+=' · 已操作 '+liking.total_attempts+' 次';
     }

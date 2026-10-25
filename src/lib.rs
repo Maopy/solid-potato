@@ -6,6 +6,7 @@
 
 pub mod capture_service;
 pub mod capture_sidecar;
+mod child_process;
 pub mod config;
 pub mod credentials;
 pub mod doctor;

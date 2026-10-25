@@ -134,13 +134,26 @@ impl ProbeBridge {
         }
     }
 
-    pub fn configure_room_profiles(&mut self, profiles: std::collections::BTreeMap<String, super::room_profiles::RoomProfile>) {
+    pub fn configure_room_profiles(
+        &mut self,
+        profiles: std::collections::BTreeMap<String, super::room_profiles::RoomProfile>,
+    ) {
         self.room_profiles = profiles;
     }
-    pub fn has_room_profiles(&self) -> bool { !self.room_profiles.is_empty() }
+    pub fn has_room_profiles(&self) -> bool {
+        !self.room_profiles.is_empty()
+    }
+    pub fn waits_for_room_identity(&self) -> bool {
+        self.candidate_config.enabled && self.candidate_config.needs_page_identity()
+    }
     fn default_room_profile(&self) -> super::room_profiles::RoomProfile {
-        super::room_profiles::RoomProfile { rules:self.rules_config.clone(), timed:self.timed_config.clone(),
-            keywords:self.keyword_config.clone(), likes:self.likes_config.clone(), candidate:self.candidate_config.clone() }
+        super::room_profiles::RoomProfile {
+            rules: self.rules_config.clone(),
+            timed: self.timed_config.clone(),
+            keywords: self.keyword_config.clone(),
+            likes: self.likes_config.clone(),
+            candidate: self.candidate_config.clone(),
+        }
     }
     pub fn configure_ui(&mut self, recording: bool, unified: bool) {
         self.recording_ui = recording;
@@ -524,7 +537,11 @@ impl ProbeBridge {
                     .map(|id| format!("task {id} "))
                     .unwrap_or_default(),
                 match log["kind"].as_str() {
-                    Some("gift_candidate_draft" | "welcome_candidate_draft" | "upgrade_candidate_draft") => "candidate draft",
+                    Some(
+                        "gift_candidate_draft"
+                        | "welcome_candidate_draft"
+                        | "upgrade_candidate_draft",
+                    ) => "candidate draft",
                     Some("gift_candidate_cancelled" | "welcome_candidate_cancelled") =>
                         "candidate cancellation",
                     _ => "candidate event",
@@ -665,15 +682,38 @@ impl ProbeBridge {
     }
     pub fn bootstrap_for_room(&mut self, relay: &str, identity: Option<&str>) -> Result<String> {
         let mut config = self.bootstrap_config(relay)?;
-        let identity = identity.filter(|id| self.scope.platform()=="wechat_channels" && super::events::valid_user_id(id) && !id.trim().is_empty() && id.trim()==*id);
-        let mut profile = identity.and_then(|id|self.room_profiles.get(id)).cloned().unwrap_or_else(||self.default_room_profile());
-        config["room_profile"] = json!(identity.filter(|id|self.room_profiles.contains_key(*id)).unwrap_or("default"));
+        let identity = identity.filter(|id| {
+            self.scope.platform() == "wechat_channels"
+                && super::events::valid_user_id(id)
+                && !id.trim().is_empty()
+                && id.trim() == *id
+        });
+        let mut profile = identity
+            .and_then(|id| self.room_profiles.get(id))
+            .cloned()
+            .unwrap_or_else(|| self.default_room_profile());
+        config["room_profile"] = json!(
+            identity
+                .filter(|id| self.room_profiles.contains_key(*id))
+                .unwrap_or("default")
+        );
         if let Some(id) = identity {
             config["room_identity"] = json!(id);
-            if profile.candidate.enabled { profile.candidate.recipient_user_id=Some(id.into()); }
+            if profile.candidate.enabled {
+                profile.candidate.recipient_user_id = Some(id.into());
+            }
+        }
+        let recipient_pending =
+            profile.candidate.enabled && profile.candidate.needs_page_identity();
+        config["recipient_pending"] = json!(recipient_pending);
+        if recipient_pending {
+            profile.candidate.enabled = false;
         }
         profile.boot(&mut config);
-        self.tickets.get_mut(config["ticket"].as_str().expect("minted ticket")).expect("minted ticket").profile=Some(profile);
+        self.tickets
+            .get_mut(config["ticket"].as_str().expect("minted ticket"))
+            .expect("minted ticket")
+            .profile = Some(profile);
 
         if self.scope.platform() == "wechat_channels" {
             return Ok(format!(
@@ -712,7 +752,15 @@ impl ProbeBridge {
         if !self.tickets.contains_key(&hello.ticket) {
             bail!("pairing denied");
         }
-        let profile = self.tickets.get(&hello.ticket).and_then(|ticket|ticket.profile.clone()).unwrap_or_else(||self.default_room_profile());
+        let mut profile = self
+            .tickets
+            .get(&hello.ticket)
+            .and_then(|ticket| ticket.profile.clone())
+            .unwrap_or_else(|| self.default_room_profile());
+        // Direct/legacy bootstrap callers must also wait for a real target.
+        if profile.candidate.needs_page_identity() {
+            profile.candidate.enabled = false;
+        }
         if profile.keywords.enabled
             && (!self.automatic_send || !self.fill_preview || self.fill_test_text.is_some())
         {
@@ -834,7 +882,8 @@ impl ProbeBridge {
                 preview,
                 candidate_preview: profile.candidate.enabled.then(|| {
                     super::candidate_preview::CandidatePreview::with_format(
-                        profile.candidate
+                        profile
+                            .candidate
                             .recipient_user_id
                             .clone()
                             .expect("validated target"),

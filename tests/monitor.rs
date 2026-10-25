@@ -243,7 +243,13 @@ async fn monitor_polls_offline_room_and_stops_cleanly() {
         })
     };
 
-    tokio::time::sleep(Duration::from_millis(8)).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while resolver.0.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
     service.stop(recording_task.id).await.unwrap();
     running.await.unwrap().unwrap();
 
@@ -352,7 +358,13 @@ async fn monitor_reconnects_after_a_recording_failure() {
         })
     };
 
-    tokio::time::sleep(Duration::from_millis(15)).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while attempts.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
     assert!(attempts.load(Ordering::SeqCst) >= 2);
     assert_eq!(
         service

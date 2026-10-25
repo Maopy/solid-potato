@@ -8,5 +8,8 @@ moderation.yml
 moderation.wechat.yml
 
 /dist/
+/.venv/
+__pycache__/
+*.pyc
 release/douyin.local.yml
 release/wechat.local.yml

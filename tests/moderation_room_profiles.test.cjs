@@ -25,3 +25,16 @@ test('room titles and invalid native identity cannot select a room profile',()=>
  f.load();for(let i=0;i<51&&f.timers.length;i++)f.timers.shift()();
  assert.equal(f.scripts[0].src,'/local/bootstrap.js');
 });
+
+
+test('empty-target mode waits for native identity even without room overrides',()=>{
+ // Exercise the same loader with the new route hint and no room_profiles.
+ const scripts=[],timers=[],window={};
+ const context={window,nonce:'',setTimeout:fn=>timers.push(fn),encodeURIComponent,
+   document:{createElement:()=>({}),head:{appendChild:s=>scripts.push(s)}}};
+ vm.createContext(context);vm.runInContext(helper+';globalThis.loadRoom=load;',context);
+ context.loadRoom({prefix:'/local/',host:'channels.weixin.qq.com',room_profiles:false,wait_for_room_identity:true});
+ assert.equal(scripts.length,0);
+ window.WXU={check_live_existing:()=>[null,{contact:{username:'actual-room'}}]};
+ timers.shift()();assert.equal(scripts[0].src,'/local/bootstrap.js?room_identity=actual-room');
+});

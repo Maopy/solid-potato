@@ -1,4 +1,4 @@
-//! macOS fallback restores routing when the owner disappears without unwinding.
+//! Native fallback restores routing when the owner disappears without unwinding.
 use crate::wechat_proxy::{ProxyAddress, ProxySnapshot, SystemProxyController};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -26,26 +26,36 @@ fn restore_owned(controller: &impl SystemProxyController, recovery: &Recovery) -
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 struct Watchdog {
     child: std::process::Child,
     input: Option<std::process::ChildStdin>,
     recovery: Recovery,
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl Watchdog {
     fn start(recovery: &Recovery) -> Result<Self> {
         use std::{
             io::{BufRead, Write},
-            os::unix::process::CommandExt,
             process::{Command, Stdio},
         };
-        let mut child = Command::new(std::env::current_exe()?)
+        let mut command = Command::new(std::env::current_exe()?);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // Own no console: closing the owner terminal must not kill recovery.
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let mut child = command
             .args(["moderation", "proxy-watchdog"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .process_group(0)
             .spawn()
             .context("starting proxy recovery watchdog")?;
         let mut input = child.stdin.take().context("watchdog input")?;
@@ -78,7 +88,7 @@ impl Watchdog {
         Ok(())
     }
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl Drop for Watchdog {
     fn drop(&mut self) {
         // EOF is the recovery trigger. Do not kill/wait: the main process may
@@ -87,14 +97,14 @@ impl Drop for Watchdog {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct RecoveryController<C> {
     controller: C,
     service: String,
     snapshot: std::sync::Mutex<Option<ProxySnapshot>>,
     watchdog: std::sync::Mutex<Option<Watchdog>>,
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl<C> RecoveryController<C> {
     pub fn new(controller: C, service: String) -> Self {
         Self {
@@ -105,7 +115,7 @@ impl<C> RecoveryController<C> {
         }
     }
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl<C: SystemProxyController> SystemProxyController for RecoveryController<C> {
     fn current_proxy(&self) -> Result<ProxySnapshot> {
         let snapshot = self.controller.current_proxy()?;
@@ -147,7 +157,7 @@ impl<C: SystemProxyController> SystemProxyController for RecoveryController<C> {
 }
 
 pub fn run() -> Result<()> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         use std::io::{BufRead, Write};
         let mut input = std::io::stdin().lock();
@@ -169,8 +179,11 @@ pub fn run() -> Result<()> {
         if line.trim() == "restored" {
             return Ok(());
         }
+        #[cfg(target_os = "macos")]
         let controller =
             crate::wechat_proxy::MacOsNetworkSetupProxyController::new(&recovery.service);
+        #[cfg(target_os = "windows")]
+        let controller = crate::wechat_proxy::WindowsInternetSettingsProxyController::new();
         let mut last = None;
         for _ in 0..5 {
             match restore_owned(&controller, &recovery) {
@@ -182,8 +195,8 @@ pub fn run() -> Result<()> {
         return Err(last.unwrap())
             .context("proxy recovery watchdog could not restore system settings");
     }
-    #[cfg(not(target_os = "macos"))]
-    bail!("proxy recovery watchdog is currently supported on macOS")
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    bail!("proxy recovery watchdog is currently supported on macOS and Windows")
 }
 
 #[cfg(test)]

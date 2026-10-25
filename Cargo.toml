@@ -1,7 +1,8 @@
 [package]
 name = "live-archive-core"
-version = "0.3.65"
+version = "0.3.68"
 edition = "2024"
+rust-version = "1.89"
 license = "LicenseRef-MIT-Common-Clause"
 description = "Cross-platform live-stream recording core"
 
@@ -36,3 +37,7 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Threading", "Win32_Networking_WinInet"] }

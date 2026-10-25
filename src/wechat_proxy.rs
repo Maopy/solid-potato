@@ -115,6 +115,14 @@ impl<C: SystemProxyController> WeChatProxySession<C> {
 
 pub trait CommandRunner: Send + Sync {
     fn run(&self, program: &str, arguments: &[&str]) -> Result<String>;
+
+    fn refresh_internet_settings(&self) -> Result<()> {
+        self.run(
+            "rundll32.exe",
+            &["user32.dll,UpdatePerUserSystemParameters"],
+        )?;
+        Ok(())
+    }
 }
 
 pub struct ProcessCommandRunner;
@@ -132,7 +140,44 @@ impl CommandRunner for ProcessCommandRunner {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Globalization::{CP_OEMCP, MultiByteToWideChar};
+            // reg/certutil emit the console OEM code page, including on Chinese Windows.
+            let mut wide = vec![0u16; output.stdout.len()];
+            let length = unsafe {
+                MultiByteToWideChar(
+                    CP_OEMCP,
+                    0,
+                    output.stdout.as_ptr(),
+                    output.stdout.len().try_into()?,
+                    wide.as_mut_ptr(),
+                    wide.len().try_into()?,
+                )
+            };
+            if length == 0 && !output.stdout.is_empty() {
+                return Err(std::io::Error::last_os_error())
+                    .context("decoding system command output");
+            }
+            Ok(String::from_utf16_lossy(&wide[..length as usize]))
+        }
+        #[cfg(not(windows))]
         String::from_utf8(output.stdout).context("reading command output as UTF-8")
+    }
+
+    #[cfg(windows)]
+    fn refresh_internet_settings(&self) -> Result<()> {
+        use windows_sys::Win32::Networking::WinInet::{
+            INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED, InternetSetOptionW,
+        };
+        for option in [INTERNET_OPTION_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH] {
+            if unsafe { InternetSetOptionW(std::ptr::null_mut(), option, std::ptr::null(), 0) } == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("refreshing Windows proxy settings");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -213,7 +258,8 @@ impl<R: CommandRunner> LocalCertificateController for MacOsSecurityCertificateCo
             .runner
             .run("security", &["default-keychain", "-d", "user"])?;
         let keychain = keychain.trim().trim_matches('"');
-        if !std::path::Path::new(keychain).is_absolute() || keychain.contains(['\n', '\r']) {
+        // This is a macOS path even when exercised by a Windows test runner.
+        if !keychain.starts_with('/') || keychain.contains(['\n', '\r']) {
             bail!("cannot determine the current user's default keychain");
         }
         self.runner.run(
@@ -489,7 +535,7 @@ impl<R: CommandRunner> WindowsInternetSettingsProxyController<R> {
     }
 
     fn query_value(&self, value: &str) -> Result<String> {
-        self.runner.run(
+        let result = self.runner.run(
             "reg",
             &[
                 "query",
@@ -497,7 +543,24 @@ impl<R: CommandRunner> WindowsInternetSettingsProxyController<R> {
                 "/v",
                 value,
             ],
-        )
+        );
+        match result {
+            Ok(output) => Ok(output),
+            Err(error) => {
+                // Fresh profiles may have no ProxyEnable/ProxyServer values.
+                // Confirm the key is readable before accepting a missing value.
+                self.runner
+                    .run(
+                        "reg",
+                        &[
+                            "query",
+                            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                        ],
+                    )
+                    .map_err(|_| error)?;
+                Ok(String::new())
+            }
+        }
     }
 
     fn set_value(&self, value: &str, kind: &str, data: &str) -> Result<()> {
@@ -516,10 +579,7 @@ impl<R: CommandRunner> WindowsInternetSettingsProxyController<R> {
             ],
         )?;
         // Broadcast the change so applications that use WinINet can reload it.
-        self.runner.run(
-            "rundll32.exe",
-            &["user32.dll,UpdatePerUserSystemParameters"],
-        )?;
+        self.runner.refresh_internet_settings()?;
         Ok(())
     }
 }
@@ -529,10 +589,10 @@ impl<R: CommandRunner> SystemProxyController for WindowsInternetSettingsProxyCon
         let enabled = parse_windows_registry_value(&self.query_value("ProxyEnable")?)
             .map(|value| value == "0x1" || value == "1")
             .unwrap_or(false);
-        let server = parse_windows_registry_value(&self.query_value("ProxyServer")?);
         if !enabled {
             return Ok(ProxySnapshot::default());
         }
+        let server = parse_windows_registry_value(&self.query_value("ProxyServer")?);
         Ok(server
             .map(|value| parse_windows_proxy_servers(&value))
             .unwrap_or_default())

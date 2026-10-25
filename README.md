@@ -15,6 +15,8 @@ The shipped Douyin/WeChat resolvers intentionally report `NotConfigured`: each i
 
 ## Run
 
+Windows 开发、ZIP 打包和双击启动步骤见 [Windows 使用说明](docs/windows.md)。
+
 ```sh
 # Create the user configuration template, edit it, then import it.
 cargo run -- config init
@@ -61,7 +63,7 @@ intercepts page/script traffic; live CDN media is transparently forwarded.
 
 ## 统一场控入口
 
-发布包双击 `启动场控.command` 或执行 `./run.sh`，同时启动抖音和视频号并打开统一控制页，支持场控开关、录制与共享下载任务。实际房间配置沿用原自动配置；详见 [统一入口说明](docs/moderation-unified.md)。
+Windows 发布包双击 `启动场控.cmd`；macOS 双击 `启动场控.command` 或执行 `./run.sh`，同时启动抖音和视频号并打开统一控制页，支持场控开关、录制与共享下载任务。实际房间配置沿用原自动配置；详见 [统一入口说明](docs/moderation-unified.md)。
 
 ## 场控内录制
 
@@ -171,3 +173,5 @@ The 0.3.6 release adds room-scoped periodic random messages with gift priority a
 本地发布时运行 `python3 release/package.py`，打包流程会自动继承 `dist` 中上一版本的整个 `config` 目录，保留旧配置值和自定义文件，新版本新增的配置文件使用模板默认值。校验通过后再替换配置，压缩包也包含继承后的配置。修复已生成版本可使用 `--inherit-config-only`，原目标配置会备份到该版本目录下的 `config.before-inherit`（重名时添加编号）。
 
 评论关键词自动回复支持抖音、视频号，多个关键词可共用回复并共享冷却。见 [配置说明](docs/moderation-keywords.md)。发布打包继承上一版本 config。
+
+Windows 0.3.68 更新及升级步骤见 [发布说明](docs/moderation-release-0.3.68.md)。

@@ -184,7 +184,8 @@ fn yaml_targets_wechat_tls_and_native_lifecycle_restores_original_settings_on_dr
     assert!(config.probe_options().system_proxy);
     let scope = ProbeScope::from_room_url(config.room.url).unwrap();
     // mitmproxy uses Python regex syntax (lookahead is unsupported by Rust regex).
-    let result = std::process::Command::new("python3")
+    let result = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .args(["-X", "utf8"])
         .args(["-c", "import re,sys,json; print(json.dumps([bool(re.match(sys.argv[1], host)) for host in sys.argv[2:]]))"])
         .arg(ignore_hosts(&scope).unwrap())
         .args(["channels.weixin.qq.com:443", "live.douyin.com:443", "media.wxlivecdn.com:443"])
