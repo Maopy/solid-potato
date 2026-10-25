@@ -180,4 +180,4 @@ The 0.3.6 release adds room-scoped periodic random messages with gift priority a
 
 Windows 0.3.68 更新及升级步骤见 [发布说明](docs/moderation-release-0.3.68.md)。
 
-0.3.69 起 Windows 与 Mac Apple Silicon 同步发布，见 [升级说明](docs/moderation-release-0.3.69.md)。
+0.3.70 起 Windows 与 Mac Apple Silicon 同步发布，见 [升级说明](docs/moderation-release-0.3.70.md)。

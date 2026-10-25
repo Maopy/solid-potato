@@ -132,7 +132,14 @@ const context = vm.createContext({ window: browser, XMLHttpRequest:Xhr, location
   assert.equal(planned[0].action.user_id, USER);
   assert.equal(planned[0].action.scope.room_id, ROOM);
   assert.equal(planned[0].action.scope.recipient_user_id, ANCHOR);
-  assert.ok(planned[0].action.created_at < 6500, 'no postponement by duplicate or end packets');
+  // The bridge clock starts before Node launches. Verify the exact backend
+  // deadline from accepted growth, rather than a machine-startup time limit.
+  const growth = status.previews.filter(x => x.kind === 'accepted' && x.reason === 'new_gift');
+  assert.equal(growth.length, 2, 'only genuine quantity growth advances the batch');
+  const batch = planned[0].action.gift_batch;
+  assert.equal(batch.last_gift_at, growth[1].at_ms, 'duplicates never replace the last growth time');
+  assert.equal(batch.due_at, growth[1].at_ms + 5000, 'duplicates and end packets never postpone the deadline');
+  assert.equal(planned[0].action.created_at, batch.due_at, 'plan retains the exact silence deadline');
   assert.equal(requests.some(r => r.endpoint.includes('send')), false);
   if (filling) {
     assert.equal(leaf.textContent, automatic?'':firstThanks);
