@@ -14,6 +14,31 @@ spec.loader.exec_module(package)
 
 
 class ReleaseConfigInheritance(unittest.TestCase):
+    def test_local_packaging_uses_the_current_host(self):
+        for system, machine, expected in [('Windows', 'AMD64', 'windows-x64'),
+                                           ('Darwin', 'arm64', 'macos-arm64'),
+                                           ('Darwin', 'x86_64', 'macos-x64')]:
+            with self.subTest(target=expected), \
+                    patch.object(package.platform, 'system', return_value=system), \
+                    patch.object(package.platform, 'machine', return_value=machine):
+                self.assertEqual(package.host_target(), expected)
+
+    def test_macos_archive_contains_executable_launchers_and_native_binary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'macos-release'
+            (output / 'config').mkdir(parents=True)
+            assets = {'live-archive-core': None, '启动场控.command': None}
+            for name in assets:
+                path = output / name
+                path.write_bytes(b'fixture')
+                path.chmod(0o755)
+            package.archive_release(output, assets, 'macos-arm64')
+            with tarfile.open(output.parent / 'macos-release.tar.gz') as archive:
+                self.assertEqual(set(archive.getnames()), {f'macos-release/{name}' for name in assets})
+                if package.platform.system() != 'Windows':
+                    for item in archive.getmembers():
+                        self.assertEqual(item.mode & 0o111, 0o111)
+
     def test_recipient_migration_preserves_manual_targets_and_explicit_opt_out(self):
         for fields in ["  recipient_user_id: manual-host\n",
                        "  recipient_from_page: false\n  recipient_user_id: ''\n"]:

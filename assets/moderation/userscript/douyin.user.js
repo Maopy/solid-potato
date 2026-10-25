@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         直播助手 · 抖音统一场控
 // @namespace    live-archive.local
-// @version      0.3.68
+// @version      0.3.69
 // @description  抖音直播页连接本机场控，支持场控开关、互动与录制。
 // @match        https://live.douyin.com/*
 // @match        https://www.douyin.com/*

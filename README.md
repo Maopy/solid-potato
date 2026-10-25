@@ -172,6 +172,12 @@ The 0.3.6 release adds room-scoped periodic random messages with gift priority a
 
 本地发布时运行 `python3 release/package.py`，打包流程会自动继承 `dist` 中上一版本的整个 `config` 目录，保留旧配置值和自定义文件，新版本新增的配置文件使用模板默认值。校验通过后再替换配置，压缩包也包含继承后的配置。修复已生成版本可使用 `--inherit-config-only`，原目标配置会备份到该版本目录下的 `config.before-inherit`（重名时添加编号）。
 
+本地开发使用 `cargo build -p live-archive-core`；本地优化构建使用 `cargo build -p live-archive-core --release --locked`。两者默认只构建当前系统与 CPU 架构，`python -X utf8 release/package.py` 也只打包当前平台，并仅从相同平台的旧版本继承配置。
+
+推送 `v<版本号>` 标签后，[发布流程](.github/workflows/build.yml) 在两台原生构建机上同时测试和打包 Windows x64（ZIP）与 Mac Apple Silicon（arm64，tar.gz）。两个目标全部成功、版本号与标签一致、安装包及 SHA-256 文件齐全且校验通过后，才统一发布到同一个 GitHub Release。云端使用仓库中的默认配置，不继承本机配置；各平台的 Python、FFmpeg 和语音模型仍需单独准备。
+
 评论关键词自动回复支持抖音、视频号，多个关键词可共用回复并共享冷却。见 [配置说明](docs/moderation-keywords.md)。发布打包继承上一版本 config。
 
 Windows 0.3.68 更新及升级步骤见 [发布说明](docs/moderation-release-0.3.68.md)。
+
+0.3.69 起 Windows 与 Mac Apple Silicon 同步发布，见 [升级说明](docs/moderation-release-0.3.69.md)。
