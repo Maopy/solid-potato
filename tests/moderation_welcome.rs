@@ -7,6 +7,45 @@ use live_archive_core::moderation::{
 };
 use serde_json::json;
 
+#[test]
+fn douyin_guardian_entry_reaches_custom_welcome_with_ordinary_welcomes_disabled() {
+    use live_archive_core::moderation::online::OnlinePreview;
+    let config = RulesConfig {
+        welcome_enabled: false,
+        supporter_welcome_enabled: true,
+        supporter_welcome_template: "欢迎{nickname}回家！".into(),
+        ..Default::default()
+    };
+    let mut online =
+        OnlinePreview::with_rules("123".into(), "fixture-session".into(), config).unwrap();
+    let entry = |id: &str, guardian: bool| {
+        let mut event: ProbeEvent = serde_json::from_value(json!({
+            "seq":1,"event_id":id,"event_type":"member.entered","source_kind":"network",
+            "native_event_id":id,"user_id":"9007199254740993123","nickname":"合成观众",
+            "payload":{"decoder":"douyin.pb.v1","internal_room_id":"123","recipient_user_id":"9007199254740993333",
+                       "live_eligible":true,"observed_at_ms":chrono::Utc::now().timestamp_millis()}
+        })).unwrap();
+        if guardian {
+            event.payload["supporter_title"] = json!("star_guardian");
+        }
+        event
+    };
+    let ordinary = online.ingest(0, &entry("1001", false)).unwrap();
+    assert!(welcomed(&ordinary).is_empty());
+    assert!(ordinary.iter().any(|a| a.reason == "rule_disabled"));
+    assert_eq!(
+        welcomed(&online.ingest(1, &entry("1002", true)).unwrap()),
+        ["欢迎合成观众回家！"]
+    );
+    let repeated = online.ingest(2, &entry("1003", true)).unwrap();
+    assert!(welcomed(&repeated).is_empty());
+    assert!(
+        repeated
+            .iter()
+            .any(|a| a.reason == "supporter_welcome_cooldown")
+    );
+}
+
 fn arrival(id: &str, user: &str, platform: &str) -> CoreEvent {
     CoreEvent {
         event_id: id.into(),
@@ -65,6 +104,25 @@ fn thirty_second_window_is_fixed_and_duplicates_do_not_extend_it() {
         welcomed(&engine.advance(60_001).unwrap()),
         ["欢迎丙来到直播间"]
     );
+}
+
+#[test]
+fn updating_rules_preserves_pending_welcomes_and_rejects_invalid_settings_atomically() {
+    let mut engine = Engine::new(RulesConfig::default()).unwrap();
+    engine.ingest(0, arrival("a", "甲", "douyin")).unwrap();
+    let invalid = RulesConfig {
+        welcome_template: "{unknown}".into(),
+        ..Default::default()
+    };
+    assert!(engine.update_rules(invalid).is_err());
+    assert!(engine.has_pending_work());
+    let new_rules = RulesConfig {
+        welcome_template: "欢迎{nickname}回家".into(),
+        ..Default::default()
+    };
+    engine.update_rules(new_rules).unwrap();
+    assert_eq!(welcomed(&engine.advance(30_000).unwrap()), ["欢迎甲回家"]);
+    assert!(welcomed(&engine.ingest(30_001, arrival("b", "甲", "douyin")).unwrap()).is_empty());
 }
 
 #[test]
@@ -322,6 +380,40 @@ fn supporter_welcome_removes_normal_batch_and_does_not_repeat_at_thirty_seconds(
         "欢迎乙来到直播间"
     );
     assert!(preview.advance(60_000).is_empty());
+}
+
+#[test]
+fn candidate_rule_update_preserves_welcome_window_and_cooldown() {
+    let mut preview = CandidatePreview::new("host".into());
+    preview.ingest(0, &candidate("a", "甲"));
+    let invalid = RulesConfig {
+        welcome_template: "{bad}".into(),
+        ..Default::default()
+    };
+    assert!(preview.update_rules(&invalid).is_err());
+    let next = RulesConfig {
+        welcome_template: "欢迎{nickname}回家".into(),
+        ..Default::default()
+    };
+    preview.update_rules(&next).unwrap();
+    assert_eq!(drafts(&preview.advance(30_000))[0]["text"], "欢迎甲回家");
+    assert!(preview.ingest(30_001, &candidate("b", "甲")).is_empty());
+}
+
+#[test]
+fn wechat_disabled_gift_rule_rejects_new_gift_candidates() {
+    let rules = RulesConfig {
+        gift_enabled: false,
+        ..Default::default()
+    };
+    let mut preview = CandidatePreview::with_format("host".into(), &rules).unwrap();
+    let mut gift = candidate("gift", "甲");
+    gift.event_type = "gift.candidate".into();
+    gift.payload = json!({"decoder":"wechat.app20009.reward.candidate.v1","message_type":20009,
+        "gift_id":"rose","gift_name":"玫瑰","reward_product_count":1,"recipient_user_id":"host"});
+    assert!(preview.ingest(0, &gift).is_empty());
+    assert!(preview.advance(5_000).is_empty());
+    assert_eq!(preview.status(5_000)["counters"]["rule_disabled"], 1);
 }
 
 #[test]

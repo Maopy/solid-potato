@@ -40,18 +40,27 @@ test('a repeated wall-clock boundary after rollback is not counted a second time
 });
 
 function controller(platform='wechat_channels.desktop_probe',extra={}){
- const listeners=new Map(),timers=[],intervals=[],saved=new Map();const keys=[];let clicks=0,room=true,moderation=false,recording=false,now=1000;
+ const listeners=new Map(),timers=[],intervals=[],saved=new Map();const keys=[];let clicks=0,room=true,moderation=false,recording=false,now=1000,lastGrant=-Infinity;
  const body={tagName:'BODY',children:[],dispatchEvent:e=>keys.push({type:e.type,key:e.key,code:e.code,keyCode:e.keyCode,repeat:e.repeat})},node={tagName:'BUTTON',parentElement:body,isConnected:true,disabled:false,children:[],
   matches:s=>s==='button,[role="button"]',closest:()=>null,contains:n=>n===node,getBoundingClientRect:()=>({left:10,top:10,width:20,height:20}),dispatchEvent:()=>{clicks++;}};body.children=[node];
  const document={body,activeElement:body,documentElement:{},hidden:false,querySelectorAll:q=>q.startsWith('body >')||q.startsWith('button[')||q.startsWith('div.')?[node]:[],querySelector:()=>node,elementFromPoint:()=>node,
   addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name);}};
  const window={addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name);},getComputedStyle:()=>({cursor:'pointer'}),localStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)},MouseEvent:class{},KeyboardEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},WXU:{check_live_existing:()=>[null,{contact:{username:'anchor'}}]}};
  node.__reactProps$test={onClick:()=> '登录后即可点赞'};
- const context={window,document,Date:{now:()=>now},BOOT:{adapter_id:platform,room_url:'https://live.douyin.com/123',like_period_ledger:extra.mode==='clock'},likeConfig:{mode:'continuous',interval_ms:800,every_minutes:10,batch_count:200,missed:'catch_up_once',...extra},location:{origin:'https://test',pathname:'/live'},sdk:{getStatus:()=>({stopped:false,moderation_enabled:moderation,recording}),claimLikePeriod:async()=>({claimed:true,period_end_ms:600000})},sameRoom:()=>room,
+ const context={window,document,Date:{now:()=>now},BOOT:{adapter_id:platform,room_url:'https://live.douyin.com/123',like_period_ledger:true},likeConfig:{mode:'continuous',interval_ms:800,every_minutes:10,batch_count:200,missed:'catch_up_once',...extra},location:{origin:'https://test',pathname:'/live'},sdk:{onDispose(){},getStatus:()=>({stopped:false,moderation_enabled:moderation,recording}),claimLikePeriod:async initial=>{if(extra.mode==='clock')return {claimed:true,period_end_ms:600000,batch_count:extra.batch_count||200};const cadence=platform==='douyin.live_page'?33:(extra.interval_ms||800),claimed=initial||now-lastGrant>=cadence;if(claimed)lastGrant=now;return {claimed,period_end_ms:now+cadence,batch_count:1};},claimLikeAction:async()=>{const cadence=platform==='douyin.live_page'?33:(extra.interval_ms||800),claimed=now-lastGrant>=cadence;if(claimed)lastGrant=now;return {claimed,batch_count:1};}},sameRoom:()=>room,
   setInterval:(fn,ms)=>{timers.push(fn);intervals.push(ms);return fn;},clearInterval:fn=>timers.splice(timers.indexOf(fn),1),setTimeout,clearTimeout};
  vm.createContext(context);vm.runInContext(source+';globalThis.controller=createLikeController(likeConfig);',context);
- return {c:context.controller,node,document,timers,intervals,saved,keys,advance:ms=>now+=ms,clicks:()=>clicks,room:v=>room=v,event:type=>{let prevented=false,stopped=false;listeners.get(type)?.({type,target:node,composedPath:()=>[node,body],preventDefault:()=>prevented=true,stopImmediatePropagation:()=>stopped=true});return {prevented,stopped};}};
+ return {c:context.controller,context,node,document,timers,intervals,saved,keys,advance:ms=>now+=ms,clicks:()=>clicks,room:v=>room=v,event:type=>{let prevented=false,stopped=false;listeners.get(type)?.({type,target:node,composedPath:()=>[node,body],preventDefault:()=>prevented=true,stopImmediatePropagation:()=>stopped=true});return {prevented,stopped};}};
 }
+test('live like settings update and disable the controller without auto-starting',async()=>{
+ const s=controller();s.c.dispose();
+ const config={enabled:true,mode:'continuous',interval_ms:800,every_minutes:10,batch_count:200,missed:'catch_up_once',target_selector:null};
+ s.context.sdk.applyLikesConfig(config);assert.equal(s.context.sdk.likes.getStatus().enabled,false);
+ s.context.sdk.likes.setEnabled(true);await Promise.resolve();await Promise.resolve();
+ s.context.sdk.applyLikesConfig({...config,interval_ms:1200});assert.equal(s.context.sdk.likes.getStatus().enabled,true);
+ assert.equal(s.timers.length,1);
+ s.context.sdk.applyLikesConfig({...config,enabled:false});assert.equal(s.context.sdk.likes,null);assert.equal(s.timers.length,0);
+});
 test('target picker consumes the complete selection gesture without liking, saves its selector and cleans up',async()=>{
  const s=controller();assert.equal(s.c.getStatus().enabled,false);assert.equal(s.clicks(),0);
  s.c.pick();assert.throws(()=>s.c.setEnabled(true),/定位/);
@@ -89,7 +98,7 @@ test('a held Z produces repeat keydown events and one final keyup when a clock b
  const s=controller('douyin.live_page');s.c.dispose();
  // Exercise scheduler lifecycle separately from wall-clock scheduling in the controller fixture.
  let now=0,held=false;const events=[];
- const c={Date,config:{mode:'clock',every_minutes:10,batch_count:3,interval_ms:800,missed:'catch_up_once'},io:{now:()=>now,inRoom:()=>true,visible:()=>true,claim:async()=>({claimed:true,period_end_ms:600000}),action:async()=>{events.push(held?'repeat':'down');held=true;return true;},release:()=>{if(held)events.push('up');held=false;}}};
+ const c={Date,config:{mode:'clock',every_minutes:10,batch_count:3,interval_ms:800,missed:'catch_up_once'},io:{now:()=>now,inRoom:()=>true,visible:()=>true,claim:async()=>({claimed:true,period_end_ms:600000,batch_count:3}),action:async()=>{events.push(held?'repeat':'down');held=true;return true;},release:()=>{if(held)events.push('up');held=false;}}};
  vm.createContext(c);vm.runInContext(source+';globalThis.engine=createLikeScheduler(config,io);',c);
  c.engine.setEnabled(true);await c.engine.step();now+=800;await c.engine.step();now+=800;await c.engine.step();
  assert.deepEqual(events,['down','repeat','repeat','up']);assert.equal(c.engine.getStatus().remaining,0);
@@ -111,18 +120,28 @@ test('WeChat automatic detection follows the live player corner and rejects othe
 });
 test('backend ledger catches up immediately on enable and prevents repeats after toggling or reloading',async()=>{
  let now=new Date(2026,9,22,1,3).getTime(),calls=0,actions=0;const periods=new Set();
- const io={now:()=>now,inRoom:()=>true,visible:()=>true,action:async()=>{actions++;return true;},claim:async()=>{calls++;const start=Math.floor(now/600000)*600000,claimed=!periods.has(start);periods.add(start);return {claimed,period_end_ms:start+600000};}};
+ const io={now:()=>now,inRoom:()=>true,visible:()=>true,action:async()=>{actions++;return true;},claim:async()=>{calls++;const start=Math.floor(now/600000)*600000,claimed=!periods.has(start);periods.add(start);return {claimed,period_end_ms:start+600000,batch_count:3};}};
  const c={Date,io,config:{mode:'clock',interval_ms:800,every_minutes:10,batch_count:3,missed:'catch_up_once'}};vm.createContext(c);vm.runInContext(source+';globalThis.make=()=>createLikeScheduler(config,io);',c);
  const first=c.make();first.setEnabled(true);await first.step();assert.equal(actions,1);for(let i=0;i<2;i++){now+=800;await first.step();}assert.equal(actions,3);
  first.setEnabled(false);first.setEnabled(true);await first.step();assert.equal(actions,3);assert.equal(first.getStatus().remaining,0);
  const reloaded=c.make();reloaded.setEnabled(true);await reloaded.step();assert.equal(actions,3);assert.equal(calls,3);
  now=new Date(2026,9,22,1,10).getTime();await reloaded.step();assert.equal(actions,4);
 });
+test('backend determines the claimed batch size and invalid grants never execute',async()=>{
+ let now=0,actions=0;
+ const io={now:()=>now,inRoom:()=>true,visible:()=>true,action:async()=>{actions++;return true;},claim:async()=>({claimed:true,period_end_ms:600000,batch_count:2})};
+ const c={Date,io,config:{mode:'clock',interval_ms:800,every_minutes:10,batch_count:200,missed:'catch_up_once'}};
+ vm.createContext(c);vm.runInContext(source+';globalThis.engine=createLikeScheduler(config,io);',c);
+ c.engine.setEnabled(true);await c.engine.step();now+=800;await c.engine.step();now+=800;await c.engine.step();
+ assert.equal(actions,2);assert.equal(c.engine.getStatus().remaining,0);
+ c.engine.setEnabled(false);c.io.claim=async()=>({claimed:true,period_end_ms:600000,batch_count:10001});c.engine.setEnabled(true);await c.engine.step();
+ assert.equal(actions,2);assert.equal(c.engine.getStatus().reason,'backend_unavailable');
+});
 test('backend failure never falls back to local likes, and disabling during a claim prevents execution',async()=>{
  let now=1000,actions=0,resolve;
  const c={Date,io:{now:()=>now,inRoom:()=>true,visible:()=>true,action:async()=>{actions++;return true;},claim:async()=>{throw Error('offline');}},config:{mode:'clock',interval_ms:800,every_minutes:10,batch_count:200,missed:'catch_up_once'}};
  vm.createContext(c);vm.runInContext(source+';globalThis.engine=createLikeScheduler(config,io);',c);c.engine.setEnabled(true);await c.engine.step();assert.equal(actions,0);assert.equal(c.engine.getStatus().reason,'backend_unavailable');
- now+=3000;c.io.claim=()=>new Promise(r=>resolve=r);const pending=c.engine.step();c.engine.setEnabled(false);resolve({claimed:true,period_end_ms:600000});await pending;assert.equal(actions,0);assert.equal(c.engine.getStatus().enabled,false);
+ now+=3000;c.io.claim=()=>new Promise(r=>resolve=r);const pending=c.engine.step();c.engine.setEnabled(false);resolve({claimed:true,period_end_ms:600000,batch_count:3});await pending;assert.equal(actions,0);assert.equal(c.engine.getStatus().enabled,false);
 });
 test('the confirmed Channels native cheers selector is unique and independent of screen coordinates',()=>{
  const node={};let candidates=[node];const c={doc:{querySelectorAll:q=>q==='.controls__ft .cheers__wrp .live-opr__btn'?candidates:[]},win:{}};
@@ -131,9 +150,10 @@ test('the confirmed Channels native cheers selector is unique and independent of
 
 test('Douyin clock batches hold Z at keyboard repeat speed, independently of mouse interval',async()=>{
  const s=controller('douyin.live_page',{mode:'clock',interval_ms:800});
+ s.context.sdk.claimLikeAction=async()=>{throw Error('Douyin batches must not wait for per-action grants');};
  assert.equal(s.intervals[0],33);
  s.c.setEnabled(true);await Promise.resolve();await Promise.resolve();await s.timers[0]();
- for(let i=1;i<200;i++){s.advance(33);await s.timers[0]();}
+ for(let i=0;i<205&&s.c.getStatus().remaining;i++){s.advance(33);await s.timers[0]();}
  assert.equal(s.keys.length,201);
  assert.equal(s.keys[0].type,'keydown');assert.equal(s.keys[0].repeat,false);
  assert.ok(s.keys.slice(1,200).every(e=>e.type==='keydown'&&e.repeat===true));
@@ -142,5 +162,11 @@ test('Douyin clock batches hold Z at keyboard repeat speed, independently of mou
  assert.equal(s.c.getStatus().key_held,false);
  s.advance(3300);await s.timers[0]();assert.equal(s.keys.length,201);
  s.c.dispose();
- const wx=controller();assert.equal(wx.intervals[0],800);wx.c.dispose();
+ const wx=controller();assert.equal(wx.intervals[0],100);wx.c.dispose();
+});
+test('WeChat clock batches use the backend grant rather than local batch settings',async()=>{
+ const s=controller('wechat_channels.desktop_probe',{mode:'clock',batch_count:2,interval_ms:800});
+ s.c.setEnabled(true);await Promise.resolve();await Promise.resolve();
+ await s.timers[0]();s.advance(800);await s.timers[0]();s.advance(800);await s.timers[0]();
+ assert.equal(s.clicks(),2);assert.equal(s.c.getStatus().remaining,0);
 });

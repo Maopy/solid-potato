@@ -61,6 +61,15 @@ def inherit_config(source, output, validator, keep_backup=False):
     return backup if keep_backup else None
 
 
+def inherit_local_asr(source, output):
+    """Keep the previous release's local ASR selection outside the archive."""
+    if source is None or (output / 'asr.dev.json').exists():
+        return
+    previous = source.parent / 'asr.dev.json'
+    if previous.is_file():
+        shutil.copy2(previous, output / 'asr.dev.json')
+
+
 def migrate_unified(directory):
     """Enable the new Douyin transport only when the old config has no preference."""
     path = directory / "unified.yml"
@@ -116,6 +125,12 @@ def validate_configs(binary, directory):
     migrate_recording(directory)
     migrate_likes(directory)
     migrate_wechat_recipient(directory)
+    for overlay in directory.glob('*.room-overrides.json'):
+        name = overlay.name.removesuffix('.room-overrides.json')
+        config = directory / (name + '.yml')
+        if not config.is_file():
+            raise RuntimeError(f'Cannot migrate room settings without {config.name}')
+        subprocess.run([binary, 'moderation', 'migrate-room-overrides', '--config', config], check=True)
     example = directory / 'timed-messages.example.yml'
     if example.exists():
         text = example.read_text(encoding='utf-8')
@@ -152,18 +167,25 @@ def release_assets(repo, version, target='macos-arm64', binary=None):
         ('live-archive-core.exe' if target.startswith('windows-') else 'live-archive-core'):
             binary or repo / 'target/release' / ('live-archive-core.exe' if target.startswith('windows-') else 'live-archive-core'),
         'LICENSE': repo / 'LICENSE',
+        'licenses/Apache-2.0.txt': repo / 'licenses/Apache-2.0.txt',
+        'licenses/Tauri-MIT.txt': repo / 'licenses/Tauri-MIT.txt',
+        'config/asr-hotwords.txt': repo / 'release/asr-hotwords.txt',
         'tools/read_moderation_raw.py': repo / 'tools/read_moderation_raw.py',
-        'tools/firered_asr_worker.py': repo / 'tools/firered_asr_worker.py',
-        'tools/firered_asr_launcher.py': repo / 'tools/firered_asr_launcher.py',
-        'tools/download_firered_model.py': repo / 'tools/download_firered_model.py',
+        'tools/funasr_asr_worker.py': repo / 'tools/funasr_asr_worker.py',
+        'tools/startlux_service.py': repo / 'tools/startlux_service.py',
+        '本地留言评分说明.md': repo / 'docs/moderation-decision.md',
         'THIRD_PARTY_NOTICES.md': repo / 'THIRD_PARTY_NOTICES.md',
         '使用说明.md': repo / f'docs/moderation-release-{version}.md',
     }
     assets.update({f'config/{name}': repo / 'release' / name for name in CONFIGS})
-    scripts = ['run.cmd', '启动场控.cmd'] if target.startswith('windows-') else SCRIPTS
+    desktop_windows = target.startswith('windows-') and tuple(map(int, version.split('.'))) >= (0, 3, 80)
+    scripts = ([] if desktop_windows else ['run.cmd', '启动场控.cmd']) if target.startswith('windows-') else SCRIPTS
     assets.update({name: repo / 'release' / name for name in scripts})
     if target.startswith('windows-'):
         assets['Windows使用说明.md'] = repo / 'docs/windows.md'
+        if desktop_windows:
+            desktop = 'live-archive-tauri.exe' if tuple(map(int, version.split('.'))) >= (0, 5, 0) else 'live-archive-gui.exe'
+            assets['启动场控.exe'] = repo / 'target/release' / desktop
     for name in ['moderation-release-0.2.0.md', 'moderation-release-0.2.1.md',
                  'moderation-release-0.2.2.md', 'moderation-release-0.2.3.md',
                  'moderation-release-0.2.4.md', 'moderation-release-0.2.5.md',
@@ -175,7 +197,7 @@ def release_assets(repo, version, target='macos-arm64', binary=None):
                  'moderation-release-0.3.8.md', 'moderation-release-0.3.9.md', 'moderation-release-0.3.10.md', 'moderation-release-0.3.11.md', 'moderation-release-0.3.12.md', 'moderation-release-0.3.13.md', 'moderation-release-0.3.14.md', 'moderation-release-0.3.15.md', 'moderation-unified.md',
                  'moderation-keywords.md', 'moderation-recording.md', 'moderation-likes.md', 'asr-local-development.md',
                  f'moderation-release-{version}.md', 'moderation-next-version.md',
-                 'moderation-welcome.md']:
+                 'moderation-welcome.md', 'moderation-timeline.md']:
         assets[f'docs/{name}'] = repo / 'docs' / name
     return assets
 
@@ -208,6 +230,7 @@ def main():
     parser.add_argument('--config-from', type=Path, help='inherit the config directory of the currently running release')
     parser.add_argument('--target', default=host_target(), choices=[f'{os}-{arch}' for os in ['macos', 'windows', 'linux'] for arch in ['arm64', 'x64']])
     parser.add_argument('--binary', type=Path, help='path to the built native CLI (for custom Cargo target directories)')
+    parser.add_argument('--asr-config', type=Path, help='optional local ASR configuration to include')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
     version = re.search(r'^version = "([^"]+)"', (repo / 'Cargo.toml').read_text(encoding='utf-8'), re.M)[1]
@@ -216,12 +239,17 @@ def main():
     if source is not None and not source.is_dir():
         raise SystemExit(f'Config source does not exist: {source}')
     assets = release_assets(repo, version, args.target, args.binary.resolve() if args.binary else None)
+    if args.asr_config:
+        assets['asr.dev.json'] = args.asr_config.resolve(strict=True)
     if args.inherit_config_only:
         if not (output / 'config').is_dir() or source is None:
             raise SystemExit('An existing release and a previous config directory are required')
     else:
         if output.exists():
             raise SystemExit(f'Release directory already exists; choose a fresh version: {output}')
+        archive = output.parent / (output.name + ('.zip' if args.target.startswith('windows-') else '.tar.gz'))
+        if archive.exists() or Path(str(archive) + '.sha256').exists():
+            raise SystemExit(f'Release archive or checksum already exists; choose a fresh version: {archive}')
         output.mkdir(parents=True)
         for relative, original in assets.items():
             destination = output / relative
@@ -234,10 +262,30 @@ def main():
     if source is not None:
         backup = inherit_config(source, output, lambda directory: validate_configs(binary, directory),
                                 keep_backup=args.inherit_config_only)
+        if not args.inherit_config_only:
+            inherit_local_asr(source, output)
         print(f'Inherited config: {source}')
         if backup:
             print(f'Previous destination config backup: {backup}')
     else:
+        validate_configs(binary, output / 'config')
+    if version == '0.4.16' and not args.inherit_config_only and source is not None:
+        # Activate only the previously documented, commented 7-level setting.
+        path = output / 'config' / 'wechat-auto.yml'
+        if path.exists():
+            contents = path.read_text(encoding='utf-8')
+            contents = re.sub(r'^([ \t]*)# min_fansclub_level: 7  # 当前版本尚不支持，暂保留为注释[ \t]*$', r'\1min_fansclub_level: 7', contents, flags=re.M)
+            path.write_text(contents, encoding='utf-8')
+            validate_configs(binary, output / 'config')
+    # The 0.4.10 request enables the newly supported Douyin user-grade rule
+    # in the inherited local profiles; subsequent releases preserve preferences.
+    if version == '0.4.10' and not args.inherit_config_only:
+        for name in ('douyin.yml', 'douyin-auto.yml', 'douyin-second.yml'):
+            path = output / 'config' / name
+            if path.exists():
+                text = path.read_text(encoding='utf-8')
+                text = re.sub(r'^(\s*wealth:\s*)false(\s*(?:#.*)?)$', r'\1true\2', text, flags=re.M)
+                path.write_text(text, encoding='utf-8')
         validate_configs(binary, output / 'config')
     archive_release(output, assets, args.target)
 

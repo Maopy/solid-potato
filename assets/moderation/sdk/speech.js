@@ -29,13 +29,23 @@
       .catch(()=>{if(version===epoch)state={...state,state:'disconnected',error:'语音连接中断'};return sdk.getSpeechStatus();})
       .finally(()=>{pending=null;});return pending;
   };
-  sdk.setSpeechEnabled=async enabled=>{
+  sdk.setSpeechEnabled=async (enabled,extra={})=>{
     const version=++epoch;
     // Clearing is immediate; an old status response cannot restore old text.
     if(!enabled)state={enabled:false,state:'off',recent:[],error:null};
-    const value=await call(enabled?'start':'stop',enabled?{stream_url:source()}:{});
+    const value=await call(enabled?'start':'stop',{...extra,...(enabled?{stream_url:source()}:{})});
     if(version===epoch&&!stopped)state=value;
     return sdk.getSpeechStatus();
+  };
+  let lastRequest=null;
+  sdk.applySpeechRequest=async id=>{
+    if(lastRequest===id)return;
+    lastRequest=id;
+    let error=null;
+    try{await sdk.setSpeechEnabled(true,{request_id:id});}
+    catch(e){error=String(e.message||e).slice(0,160);}
+    try{await call('status',{request_id:id,...(error?{error}:{})});}
+    catch(_){lastRequest=null;}
   };
   sdk.onDispose(()=>{epoch++;state={enabled:false,state:'off',recent:[],error:null};});
 })();

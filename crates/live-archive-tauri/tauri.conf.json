@@ -1,0 +1,1 @@
+{"$schema":"https://schema.tauri.app/config/2","productName":"直播助手","version":"0.5.14","identifier":"dev.solidpotato.livearchive.tauri","build":{"frontendDist":"ui"},"app":{"windows":[],"security":{"csp":"default-src 'self'; style-src 'unsafe-inline'"}},"bundle":{"active":false}}

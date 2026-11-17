@@ -7,6 +7,7 @@ use std::path::Path;
 
 pub struct ProbeJournal {
     connection: Connection,
+    path: std::path::PathBuf,
 }
 
 impl ProbeJournal {
@@ -36,6 +37,11 @@ impl ProbeJournal {
                  received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                  PRIMARY KEY(run_id, connection_id, seq)
              );
+             CREATE TABLE IF NOT EXISTS speech_transcripts (
+                 id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, connection_id TEXT NOT NULL,
+                 start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, text TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS speech_transcripts_room_time ON speech_transcripts(run_id,connection_id,end_ms);
              CREATE TABLE IF NOT EXISTS preview_audits (
                  id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, connection_id TEXT NOT NULL,
                  audit_json TEXT NOT NULL,
@@ -59,8 +65,10 @@ impl ProbeJournal {
              );",
         )?;
         super::retention::initialize(&connection)?;
-        Ok(Self { connection })
+        Ok(Self { connection, path: path.to_path_buf() })
     }
+
+    pub fn path(&self) -> &Path { &self.path }
 
     pub fn claim_like_period(
         &mut self,

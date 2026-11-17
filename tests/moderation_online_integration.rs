@@ -190,11 +190,11 @@ async fn exercise_online(
     assert!(prices >= 1);
     let planned: i64 = connection.query_row("SELECT COUNT(*) FROM preview_audits WHERE json_extract(audit_json, '$.kind')='planned'", [], |row| row.get(0)).unwrap();
     // Arrival stays in the 30-second collection window and is cancelled by upgrade.
-    assert_eq!(planned, 3);
+    assert_eq!(planned, 4);
     let batched:i64=connection.query_row("SELECT COUNT(*) FROM preview_audits WHERE json_extract(audit_json,'$.reason')='welcome_batched'",[],|row|row.get(0)).unwrap();
     assert_eq!(batched, 1);
     let cancelled: i64 = connection.query_row("SELECT COUNT(*) FROM preview_audits WHERE json_extract(audit_json, '$.kind')='cancelled'", [], |row| row.get(0)).unwrap();
-    assert_eq!(cancelled, if scheduled { 3 } else { 2 });
+    assert_eq!(cancelled, if scheduled { 4 } else { 2 });
     if scheduled {
         let dispatches: i64 = connection.query_row("SELECT COUNT(*) FROM preview_audits WHERE json_extract(audit_json, '$.kind')='dispatch_preview'", [], |row| row.get(0)).unwrap();
         assert_eq!(dispatches, 2);

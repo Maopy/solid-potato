@@ -1,11 +1,11 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-function bundle(){let source=fs.readFileSync('assets/moderation/userscript/douyin.user.js','utf8').replace('__BASE_JSON__','"http://127.0.0.1:2025"').replace('__KEY_JSON__','"private-pairing-key"');
-for(const [key,path] of Object.entries({SDK:'sdk/probe',RAW:'sdk/raw',SUBMIT:'sdk/submit',DECODER:'adapters/douyin-decoder',ADAPTER:'adapters/douyin-live',FILL:'adapters/douyin-fill',RECORDING:'adapters/douyin-recording',PANEL:'sdk/panel'}))source=source.replace('/*__'+key+'__*/',fs.readFileSync('assets/moderation/'+path+'.js','utf8'));return source;}
+function bundle(){let source=fs.readFileSync('assets/moderation/userscript/douyin.user.js','utf8').replace('__BASE_JSON__','"http://127.0.0.1:2025"').replace('__KEY_JSON__','"private-pairing-key"').replace('__CLIENT_VERSION_JSON__','"0.3.78"');
+for(const [key,path] of Object.entries({SDK:'sdk/probe',RAW:'sdk/raw',SUBMIT:'sdk/submit',DECODER:'adapters/douyin-decoder',ADAPTER:'adapters/douyin-live',FILL:'adapters/douyin-fill',RECORDING:'adapters/douyin-recording',OFFLINE_PANEL:'sdk/panel',PANEL:'sdk/panel'}))source=source.replace('/*__'+key+'__*/',fs.readFileSync('assets/moderation/'+path+'.js','utf8'));return source;}
 function setup(pathname='/123',origin='https://live.douyin.com',isolated=false,options={}){
- const requests=[],timers=new Map();let next=0,resolveBoot,platformCalls=0,helloAttempts=0;const listeners=new Map();
- class Node{constructor(tag){this.tagName=tag;this.children=[];this.style={};this.attrs={};this.textContent='';}appendChild(n){this.children.push(n);if(this.tagName==='select'&&!this.value)this.value=n.value;return n;}append(...ns){for(const n of ns)this.appendChild(n);}setAttribute(k,v){this.attrs[k]=v;}remove(){this.removed=true;}replaceChildren(...ns){this.children=ns;}}
+ const requests=[],timers=new Map();let next=0,resolveBoot,platformCalls=0,helloAttempts=0,online=!options.offline,expired=false,reloads=0;const listeners=new Map();
+ class Node{constructor(tag){this.tagName=tag;this.children=[];this.style={};this.attrs={};this.textContent='';}appendChild(n){this.children.push(n);if(this.tagName==='select'&&!this.value)this.value=n.value;return n;}append(...ns){for(const n of ns)this.appendChild(n);}setAttribute(k,v){this.attrs[k]=v;}click(){this.onclick?.();}remove(){this.removed=true;}replaceChildren(...ns){this.children=ns;}}
  const body=new Node('body'),find=(n,id)=>!n.removed&&(n.id===id?n:n.children.map(n=>find(n,id)).find(Boolean));
- const document={body,readyState:'complete',title:'主播',getElementById:id=>find(body,id),createElement:t=>new Node(t),querySelector:()=>null,querySelectorAll:()=>[],addEventListener(){},removeEventListener(){}};
+ const document={body,readyState:'complete',title:'主播',getElementById:id=>find(body,id),createElement:t=>new Node(t),querySelector:selector=>{const m=selector.match(/^#live-archive-assistant button\[aria-expanded="(true|false)"\]$/);const panel=find(body,'live-archive-assistant');return m&&panel?.children[0]?.attrs['aria-expanded']===m[1]?panel.children[0]:null;},querySelectorAll:()=>[],addEventListener(){},removeEventListener(){}};
  class Socket{static OPEN=1;constructor(url){this.url=url;this.listeners=new Map();}addEventListener(k,fn){if(!this.listeners.has(k))this.listeners.set(k,new Set());this.listeners.get(k).add(fn);}removeEventListener(k,fn){this.listeners.get(k)?.delete(fn);}dispatch(k,value){for(const fn of this.listeners.get(k)||[])fn(value);}}
  class Xhr extends Socket{open(){}getResponseHeader(){return 'application/json';}}
  const boot={v:1,room_url:'https://live.douyin.com/'+pathname.split('/').filter(Boolean).at(-1),prefix:'/local/',ticket:'ticket',adapter_id:'douyin.live_page',moderation_enabled:false,control_epoch:0,raw_messages:true,recording:true,unified_ui:true};
@@ -13,8 +13,10 @@ function setup(pathname='/123',origin='https://live.douyin.com',isolated=false,o
  setTimeout:(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id),setInterval:(fn,ms)=>{const id=++next;timers.set(id,{fn,ms,interval:true});return id;},clearInterval:id=>timers.delete(id),addEventListener:(name,fn)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn);},removeEventListener:(name,fn)=>listeners.get(name)?.delete(fn)};
  const storage=options.storage||new Map();context.sessionStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
  context.window=context;context.top=context;context.self=context;
+ context.location.reload=()=>{reloads++;};
  context.GM_xmlhttpRequest=o=>{const payload=JSON.parse(o.data);requests.push({o,payload});const reply=v=>o.onload({status:200,responseText:JSON.stringify(v)});
- if(payload.endpoint==='bootstrap'){resolveBoot=()=>reply(boot);return;}
+ if(payload.endpoint==='bootstrap'){if(!online){if(options.authDenied)o.onload({status:403,responseText:JSON.stringify({error:'userscript_auth_denied'})});else o.onerror();return;}resolveBoot=()=>reply(boot);return;}
+ if(expired&&payload.endpoint!=='goodbye'){o.onload({status:422,responseText:JSON.stringify({error:'unknown connection'})});return;}
  if(payload.endpoint==='hello'&&options.denyHelloOnce&&helloAttempts++===0){o.onload({status:422,responseText:JSON.stringify({error:'pairing denied'})});return;}
  if(payload.endpoint==='hello')reply({connection_id:'conn',binding_id:'binding',token:'session-key'});
  else if(payload.endpoint==='control')reply({enabled:payload.body.enabled,epoch:1});
@@ -24,9 +26,41 @@ function setup(pathname='/123',origin='https://live.douyin.com',isolated=false,o
  else reply({commands:[],moderation_control:{enabled:false,epoch:0}});
  };
  if(isolated){context.unsafeWindow={...context};context.unsafeWindow.top=context.unsafeWindow;context.unsafeWindow.self=context.unsafeWindow;}
- vm.createContext(context);vm.runInContext(bundle(),context);return {context,requests,timers,listeners,Socket,body,boot,resolveBoot:()=>resolveBoot?.(),get platformCalls(){return platformCalls;}};
+ vm.createContext(context);vm.runInContext(bundle(),context);return {context,requests,timers,listeners,Socket,body,boot,setOnline:()=>{online=true;},expire:()=>{expired=true;},resolveBoot:()=>resolveBoot?.(),get reloads(){return reloads;},get platformCalls(){return platformCalls;}};
 }
 const settle=()=>new Promise(r=>setImmediate(r));
+test('expired background session reloads once to obtain a fresh connection',async()=>{
+ const e=setup();e.resolveBoot();await settle();await settle();const sdk=e.context.__liveArchiveModerationV1;
+ e.expire();const tick=[...e.timers.values()].find(t=>!t.interval&&t.ms===500);assert.ok(tick);tick.fn();await settle();await settle();
+ assert.equal(e.reloads,1);assert.equal(sdk.getStatus().stopped,true);
+});
+test('a page restored from the back-forward cache reloads its disposed connection',()=>{
+ const e=setup();for(const fn of e.listeners.get('pageshow')||[])fn({persisted:false});assert.equal(e.reloads,0);
+ for(const fn of e.listeners.get('pageshow')||[])fn({persisted:true});assert.equal(e.reloads,1);
+});
+test('offline panel stays normal, errors only on actions, then connects automatically',async()=>{
+ const e=setup('/123','https://live.douyin.com',false,{offline:true});await settle();
+ const doc=e.context.document, panel=doc.getElementById('live-archive-assistant');assert.ok(panel);
+ assert.equal(doc.getElementById('live-archive-connecting'),undefined);
+ const launcher=panel.children[0],details=panel.children[1];assert.equal(details.hidden,true);
+ launcher.onclick();assert.equal(details.hidden,false);
+ const notice=details.children.at(-1);assert.equal(notice.textContent,'');
+ for(const id of ['live-archive-moderation-toggle','live-archive-record-toggle','live-archive-like-toggle','live-archive-speech-toggle']) {
+   const button=doc.getElementById(id);assert.ok(button);assert.equal(button.disabled,false);
+   await button.onclick();assert.match(notice.textContent,/启动场控/);
+ }
+ e.setOnline();const retry=[...e.timers.values()].find(t=>t.ms===3000);assert.ok(retry);retry.fn();await settle();e.resolveBoot();await settle();await settle();
+ assert.ok(e.context.__liveArchiveModerationV1?.getStatus().connected);
+ assert.notEqual(doc.getElementById('live-archive-assistant'),panel);
+ assert.equal(doc.getElementById('live-archive-assistant').children[1].hidden,false,'open panel stays open when backend connects');
+ assert.equal(doc.getElementById('live-archive-connecting'),undefined);
+});
+test('authentication failures explain how to repair the installed script',async()=>{
+ const e=setup('/123','https://live.douyin.com',false,{offline:true,authDenied:true});await settle();
+ const panel=e.context.document.getElementById('live-archive-assistant');panel.children[0].onclick();
+ await e.context.document.getElementById('live-archive-moderation-toggle').onclick();
+ assert.match(panel.children[1].children.at(-1).textContent,/身份校验失败.*重新安装/);
+});
 test('bundled userscript captures sockets during pairing and uses GM transport for controls and recording',async()=>{
  const e=setup();assert.equal(e.requests[0].payload.endpoint,'bootstrap');
  const socket=new e.context.WebSocket('wss://webcast.example.douyin.com/webcast/im/push?room_id=123');
@@ -101,6 +135,11 @@ test('isolated page socket produces native live comments without any platform wr
  socket.dispatch('message',{data:frame.buffer});e.resolveBoot();await settle();await settle();await settle();
  const status=e.context.unsafeWindow.__liveArchiveModerationV1.getStatus();
  assert.equal(status.decoder.decoded,1);assert.equal(status.delivery.observed['chat.received'],1);assert.equal(status.delivery.generated['chat.received'],undefined,'off mode does not enqueue automation events');assert.equal(status.moderation_enabled,false);
+ assert.equal(status.delivery.generated['chat.observed'],1,'native text reaches the dashboard while moderation is off');
+ assert.equal(e.requests.find(r=>r.payload.endpoint==='hello').payload.body.client_version,'0.3.78','installed script reports its own version rather than the server version');
+ await [...e.timers.values()].find(t=>t.ms===500).fn();await settle();
+ const comments=e.requests.filter(r=>r.payload.endpoint==='events').flatMap(r=>r.payload.body.events).filter(r=>r.event_type==='chat.observed');
+ assert.equal(comments.length,1);assert.equal(comments[0].payload.content,'胎记');assert.equal(comments[0].payload.live_eligible,false);
  assert.ok(!e.requests.some(r=>r.payload.endpoint==='results'),'no comment command executed');e.context.unsafeWindow.__liveArchiveModerationV1.dispose();
 });
 

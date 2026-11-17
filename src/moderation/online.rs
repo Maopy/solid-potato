@@ -53,6 +53,9 @@ impl OnlinePreview {
         self.scheduler = Some(PreviewScheduler::new(config)?);
         Ok(())
     }
+    pub fn update_rules(&mut self, config: RulesConfig) -> Result<()> {
+        self.engine.update_rules(config)
+    }
     fn collect(&mut self, logs: Vec<Audit>) -> Vec<Audit> {
         for log in &logs {
             if log.kind == "planned" {

@@ -361,7 +361,10 @@ struct CertificateRunner;
 impl CommandRunner for CertificateRunner {
     fn run(&self, program: &str, arguments: &[&str]) -> anyhow::Result<String> {
         if program == "certutil" && arguments == ["-user", "-store", "Root"] {
-            return Ok("Subject: CN=Live Archive Local CA\n".into());
+            return Ok("Subject: CN=Live Archive Local CA\nCert Hash(sha1): 0123456789abcdef0123456789abcdef01234567\n".into());
+        }
+        if program == "certutil" && arguments == ["-dump", "test-ca.cer"] {
+            return Ok("Cert Hash(sha1): 0123456789abcdef0123456789abcdef01234567\n".into());
         }
         Ok(String::new())
     }
@@ -376,6 +379,65 @@ fn windows_certificate_controller_detects_user_store_entry() {
     let controller =
         WindowsCertUtilCertificateController::with_runner(certificate, CertificateRunner);
     assert!(controller.is_installed().unwrap());
+}
+
+struct CertificateFingerprintRunner {
+    dump: &'static str,
+    store: &'static str,
+}
+impl CommandRunner for CertificateFingerprintRunner {
+    fn run(&self, program: &str, arguments: &[&str]) -> anyhow::Result<String> {
+        assert_eq!(program, "certutil");
+        match arguments {
+            ["-dump", "test-ca.cer"] => Ok(self.dump.into()),
+            ["-user", "-store", "Root"] => Ok(self.store.into()),
+            _ => anyhow::bail!("unexpected certificate command"),
+        }
+    }
+}
+
+#[test]
+fn windows_certificate_requires_exact_ca_not_an_old_matching_subject_or_public_key_hash() {
+    let dump = "Subject: CN=mitmproxy\nPublic Key Id Hash(sha1): aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nCert Hash(sha1): bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n";
+    for (store, installed) in [
+        (
+            "Subject: CN=mitmproxy\nCert Hash(sha1): aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            false,
+        ),
+        (
+            "Subject: CN=mitmproxy\nCert Hash(sha1): cccccccccccccccccccccccccccccccccccccccc\n",
+            false,
+        ),
+        ("Subject: CN=mitmproxy\n", false),
+        (
+            "证书哈希(sha1): BB BB BB BB BB BB BB BB BB BB BB BB BB BB BB BB BB BB BB BB\n",
+            true,
+        ),
+    ] {
+        let controller = WindowsCertUtilCertificateController::with_runner(
+            LocalCaCertificate {
+                common_name: "mitmproxy".into(),
+                certificate_path: "test-ca.cer".into(),
+            },
+            CertificateFingerprintRunner { dump, store },
+        );
+        assert_eq!(controller.is_installed().unwrap(), installed);
+    }
+}
+
+#[test]
+fn windows_certificate_rejects_missing_local_fingerprint() {
+    let controller = WindowsCertUtilCertificateController::with_runner(
+        LocalCaCertificate {
+            common_name: "mitmproxy".into(),
+            certificate_path: "test-ca.cer".into(),
+        },
+        CertificateFingerprintRunner {
+            dump: "invalid certificate",
+            store: "Subject: CN=mitmproxy",
+        },
+    );
+    assert!(controller.is_installed().is_err());
 }
 
 #[derive(Default)]

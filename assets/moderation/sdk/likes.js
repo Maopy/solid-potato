@@ -1,28 +1,29 @@
 // Page-side opt-in scheduling. Never tied to moderation or recording switches.
 const createLikeScheduler=(config,io)=>{
-  let enabled=false,nextMark=null,remaining=0,queued=false,batchAttempts=0,total=0,batches=0,busy=false,lastAction=-Infinity,lastNow=0,reason='disabled',epoch=0,initialClaim=false;
+  let enabled=false,nextMark=null,remaining=0,queued=false,queuedCount=0,batchAttempts=0,total=0,batches=0,busy=false,lastAction=-Infinity,lastNow=0,reason='disabled',epoch=0,initialClaim=false;
   const claimed=new Set();
   const nextAfter=now=>{const d=new Date(now);d.setMinutes((Math.floor(d.getMinutes()/config.every_minutes)+1)*config.every_minutes,0,0);return d.getTime();};
-  const begin=()=>{remaining=config.batch_count;batchAttempts=0;batches++;};
+  const begin=(count=config.batch_count)=>{remaining=count;batchAttempts=0;batches++;};
   const release=()=>io.release?.();
-  const setEnabled=value=>{release();epoch++;enabled=!!value;remaining=0;queued=false;lastAction=-Infinity;lastNow=io.now();initialClaim=enabled;nextMark=enabled&&config.mode==='clock'?(io.claim?lastNow:nextAfter(lastNow)):null;reason=enabled?null:'disabled';};
+  const setEnabled=value=>{release();epoch++;enabled=!!value;remaining=0;queued=false;queuedCount=0;lastAction=-Infinity;lastNow=io.now();initialClaim=enabled;nextMark=enabled&&config.mode==='clock'?(io.claim?lastNow:nextAfter(lastNow)):null;reason=enabled?null:'disabled';};
   const step=async()=>{
-    if(!enabled||busy)return;
+    if(!enabled)return;
     if(!io.inRoom()){setEnabled(false);reason='room_changed';return;}
+    if(busy)return;
     const now=io.now();
     if(now<lastNow-1000){release();remaining=0;queued=false;nextMark=config.mode==='clock'?(io.claim?now:nextAfter(now)):null;lastAction=-Infinity;}lastNow=now;
     if(!io.visible()){release();reason='page_hidden';return;}
+    if(io.ready&&!io.ready()){release();reason=io.reason?.()||'target_unavailable';return;}
     if(config.mode==='clock'){
       if(now>=nextMark){
         if(io.claim){
-          if(!initialClaim&&config.missed==='skip'&&now-nextMark>3000){nextMark=nextAfter(now);reason='waiting_clock';return;}
           const generation=epoch;busy=true;
           try{
-            const result=await io.claim();
+            const result=await io.claim(initialClaim);
             if(!enabled||epoch!==generation)return;
-            if(typeof result.claimed!=='boolean'||!Number.isFinite(result.period_end_ms))throw Error('invalid period response');
+            if(typeof result.claimed!=='boolean'||!Number.isFinite(result.period_end_ms)||!Number.isSafeInteger(result.batch_count)||result.batch_count<1||result.batch_count>10000)throw Error('invalid period response');
             initialClaim=false;nextMark=Math.max(result.period_end_ms,now+1000);
-            if(result.claimed){if(!remaining)begin();else if(batchAttempts>0)queued=true;}
+            if(result.claimed){if(!remaining)begin(result.batch_count);else if(batchAttempts>0){queued=true;queuedCount=result.batch_count;}}
           }catch(_){if(enabled&&epoch===generation){reason='backend_unavailable';nextMark=now+3000;}return;}
           finally{busy=false;}
         }else{
@@ -32,13 +33,35 @@ const createLikeScheduler=(config,io)=>{
       }
       if(!remaining){release();reason='waiting_clock';return;}
     }
-    if(now-lastAction<config.interval_ms)return;
+    let clockGrant=false;
+    if(config.mode==='clock'&&io.tick){
+      const generation=epoch;busy=true;
+      try{
+        const result=await io.tick();
+        if(!enabled||epoch!==generation||!io.inRoom()||!io.visible())return;
+        if(typeof result.claimed!=='boolean'||result.batch_count!==1)throw Error('invalid clock grant');
+        if(!result.claimed){reason='waiting_interval';return;}
+        clockGrant=true;
+      }catch(_){if(enabled&&epoch===generation)reason='backend_unavailable';return;}
+      finally{busy=false;}
+    }else if(config.mode==='continuous'&&io.claim){
+      const generation=epoch;busy=true;
+      try{
+        const result=await io.claim(initialClaim);
+        if(!enabled||epoch!==generation||!io.inRoom()||!io.visible())return;
+        if(typeof result.claimed!=='boolean'||result.batch_count!==1)throw Error('invalid continuous grant');
+        initialClaim=false;
+        if(!result.claimed){reason='waiting_interval';return;}
+      }catch(_){if(enabled&&epoch===generation)reason='backend_unavailable';return;}
+      finally{busy=false;}
+    }else if(now-lastAction<config.interval_ms)return;
     busy=true;const generation=epoch;
     try{
-      if(await io.action(()=>enabled&&epoch===generation&&io.inRoom()&&io.visible())){
+      const success=await io.action(()=>enabled&&epoch===generation&&io.inRoom()&&io.visible());
+      if(success){
         total++;lastAction=io.now();reason=null;
-        if(enabled&&epoch===generation&&config.mode==='clock'){remaining--;batchAttempts++;if(!remaining&&queued){queued=false;begin();}else if(!remaining)release();}
       }else {release();reason=io.reason?.()||'target_unavailable';}
+      if(enabled&&epoch===generation&&config.mode==='clock'&&(success||clockGrant)){remaining--;batchAttempts++;if(!remaining&&queued){queued=false;begin(queuedCount||config.batch_count);queuedCount=0;}else if(!remaining)release();}
     }catch(_){setEnabled(false);reason='click_error';}
     finally{busy=false;}
   };
@@ -117,7 +140,7 @@ const createLikeController=config=>{
     click();
     return true;
   };
-  const engine=createLikeScheduler(scheduleConfig,{now:()=>Date.now(),inRoom:()=>sameRoom()&&!sdk.getStatus().stopped&&(!roomIdentity||currentIdentity()===roomIdentity),visible:()=>!document.hidden&&!picking&&(!isDouyin||!document.hasFocus||document.hasFocus()),claim:isDouyin&&BOOT.like_period_ledger?()=>sdk.claimLikePeriod():undefined,action:gesture,release:releaseZ,reason:()=>lastReason});
+  const engine=createLikeScheduler(scheduleConfig,{now:()=>Date.now(),inRoom:()=>sameRoom()&&!sdk.getStatus().stopped&&(!roomIdentity||currentIdentity()===roomIdentity),visible:()=>!document.hidden&&!picking&&(!isDouyin||!document.hasFocus||document.hasFocus()),ready:()=>{if(editorFocused()){lastReason='input_busy';return false;}return isDouyin||!!target();},claim:BOOT.like_period_ledger?initial=>sdk.claimLikePeriod(initial):undefined,tick:BOOT.like_period_ledger&&!isDouyin?()=>sdk.claimLikeAction():undefined,action:gesture,release:releaseZ,reason:()=>lastReason});
   const releaseOnFocus=()=>{if(editorFocused())releaseZ();};
   const releaseOnHidden=()=>{if(document.hidden)releaseZ();};
   if(isDouyin){document.addEventListener('focusin',releaseOnFocus,true);document.addEventListener('visibilitychange',releaseOnHidden);window.addEventListener('blur',releaseZ);window.addEventListener('pagehide',releaseZ);}
@@ -158,9 +181,19 @@ const createLikeController=config=>{
     for(const event of selectionEvents)document.addEventListener(event,select,true);
     document.addEventListener('keydown',escape,true);
   };
-  const timer=setInterval(()=>engine.step(),Math.min(scheduleConfig.interval_ms,1000));
-  return {setEnabled:value=>{if(value){roomIdentity=currentIdentity();if(!roomIdentity)throw Error('等待当前直播间资料就绪');if(picking)throw Error('请先完成点赞按钮定位');if(isDouyin&&config.mode==='clock'&&!BOOT.like_period_ledger)throw Error('请升级并连接支持时段记录的新版后台');if(!isDouyin&&!target())throw Error('未识别到原生点赞按钮，请重新打开直播页');}engine.setEnabled(value);if(value)void engine.step();},pick,
+  const timer=setInterval(()=>engine.step(),isDouyin?33:100);
+  return {setEnabled:value=>{if(value){roomIdentity=currentIdentity();if(!roomIdentity)throw Error('等待当前直播间资料就绪');if(picking)throw Error('请先完成点赞按钮定位');if(!BOOT.like_period_ledger)throw Error('请升级并连接支持点赞控制的新版后台');if(!isDouyin&&!target())throw Error('未识别到原生点赞按钮，请重新打开直播页');}engine.setEnabled(value);if(value)void engine.step();},pick,
     getStatus:()=>({...engine.getStatus(),picking,key_held:!!heldNode,repeat_interval_ms:isDouyin?33:null,target_ready:isDouyin||!!target(),target_reason:lastReason,selector: isDouyin?null:selector}),
     dispose:()=>{stopPicking();clearInterval(timer);engine.dispose();if(isDouyin){document.removeEventListener('focusin',releaseOnFocus,true);document.removeEventListener('visibilitychange',releaseOnHidden);window.removeEventListener('blur',releaseZ);window.removeEventListener('pagehide',releaseZ);}}};
 };
-if(typeof BOOT!=='undefined'&&BOOT.likes?.enabled){sdk.likes=createLikeController(BOOT.likes);sdk.onDispose(()=>sdk.likes.dispose());}
+if(typeof BOOT!=='undefined'){
+  let likesSignature=JSON.stringify(BOOT.likes||null);
+  if(BOOT.likes?.enabled)sdk.likes=createLikeController(BOOT.likes);
+  sdk.applyLikesConfig=config=>{
+    if(!config||JSON.stringify(config)===likesSignature)return;
+    const active=!!sdk.likes?.getStatus().enabled;
+    sdk.likes?.dispose();sdk.likes=null;BOOT.likes=config;likesSignature=JSON.stringify(config);
+    if(config.enabled){sdk.likes=createLikeController(config);if(active){try{sdk.likes.setEnabled(true);}catch(_){}}}
+  };
+  sdk.onDispose(()=>sdk.likes?.dispose());
+}

@@ -129,7 +129,13 @@ pub struct ProcessCommandRunner;
 
 impl CommandRunner for ProcessCommandRunner {
     fn run(&self, program: &str, arguments: &[&str]) -> Result<String> {
-        let output = Command::new(program)
+        let mut command = Command::new(program);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let output = command
             .args(arguments)
             .output()
             .with_context(|| format!("starting {program}"))?;
@@ -353,10 +359,15 @@ impl<R: CommandRunner> WindowsCertUtilCertificateController<R> {
 }
 impl<R: CommandRunner> LocalCertificateController for WindowsCertUtilCertificateController<R> {
     fn is_installed(&self) -> Result<bool> {
+        // Different proxy work directories generate different CAs with the
+        // same common name. Trust must match this certificate's fingerprint.
+        let path = self.certificate.certificate_path.to_string_lossy();
+        let dump = self.runner.run("certutil", &["-dump", &path])?;
+        let expected = windows_certificate_thumbprints(&dump)
+            .pop()
+            .context("certutil did not report the local CA certificate SHA-1 fingerprint")?;
         let output = self.runner.run("certutil", &["-user", "-store", "Root"])?;
-        Ok(output
-            .lines()
-            .any(|line| line.contains(&self.certificate.common_name)))
+        Ok(windows_certificate_thumbprints(&output).contains(&expected))
     }
     fn install(&self) -> Result<()> {
         let path = self.certificate.certificate_path.to_string_lossy();
@@ -364,6 +375,20 @@ impl<R: CommandRunner> LocalCertificateController for WindowsCertUtilCertificate
             .run("certutil", &["-user", "-addstore", "Root", &path])?;
         Ok(())
     }
+}
+
+fn windows_certificate_thumbprints(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let lower = line.to_ascii_lowercase();
+            let (_, value) = lower.split_once("(sha1)")?;
+            let value = value.trim().strip_prefix(':')?;
+            let fingerprint: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+            (fingerprint.len() == 40 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()))
+                .then_some(fingerprint)
+        })
+        .collect()
 }
 
 /// Resolves the network service associated with macOS's current default route.

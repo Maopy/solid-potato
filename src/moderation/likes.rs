@@ -1,7 +1,33 @@
 //! Independent, opt-in page-side like scheduling configuration.
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Deserialize, Serialize)]
+fn default_initial() -> bool {
+    true
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LikeClaim {
+    pub v: u32,
+    pub connection_id: String,
+    pub binding_id: String,
+    pub page_url: String,
+    #[serde(default)]
+    pub input_ready: Option<bool>,
+    #[serde(default = "default_initial")]
+    pub initial: bool,
+}
+
+pub(crate) fn should_claim(
+    initial: bool,
+    previous_next: Option<i64>,
+    now: i64,
+    missed: &str,
+) -> bool {
+    initial
+        || missed != "skip"
+        || previous_next.is_none_or(|next| now.saturating_sub(next) <= 3_000)
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct LikeConfig {
     pub enabled: bool,
@@ -49,6 +75,14 @@ impl LikeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backend_decides_whether_to_skip_missed_periods() {
+        assert!(should_claim(true, Some(100_000), 110_000, "skip"));
+        assert!(!should_claim(false, Some(100_000), 103_001, "skip"));
+        assert!(should_claim(false, Some(100_000), 103_000, "skip"));
+        assert!(should_claim(false, Some(100_000), 110_000, "catch_up_once"));
+        assert!(should_claim(false, None, 110_000, "skip"));
+    }
     #[test]
     fn validates_modes_clock_alignment_and_key_interval() {
         let mut c = LikeConfig::default();

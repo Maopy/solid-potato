@@ -53,6 +53,24 @@ const douyinDecoder = (() => {
   };
   const sub = (f, k) => { const v = one(f, k); if (v === undefined) return new Map(); if (!(v instanceof Uint8Array)) throw Error("protobuf_message_type"); return pb(v); };
   const user = f => ({ id: id(f, 1), nickname: text(f, 3), fields: f });
+  const starGuardianEntry = (body, who, recipient) => {
+    try {
+      // Captured MemberMessage.EffectConfig.log_extra entries explicitly mark
+      // effect_source=star_guard and its target. Honor/fansclub effects and
+      // nickname text are not proof of a paid guardian for this anchor.
+      const club = sub(sub(who.fields, 24), 1);
+      if (!recipient || id(club, 6) !== recipient) return false;
+      const entries = sub(body, 15).get(16) || [];
+      if (entries.length > 32) return false;
+      const properties = new Map();
+      for (const raw of entries) {
+        const entry = pb(raw), key = text(entry, 1, 64), value = text(entry, 2, 128);
+        if (!key || properties.has(key)) return false;
+        properties.set(key, value);
+      }
+      return properties.get('effect_source') === 'star_guard' && properties.get('to_user_id') === who.id;
+    } catch (_) { return false; }
+  };
   const safeCount = n => { if (n < 1n || n > BigInt(Number.MAX_SAFE_INTEGER)) throw Error("gift_quantity_unsupported"); return Number(n); };
   const decimal = v => typeof v === "string" && /^[1-9][0-9]{0,19}$/.test(v) ? v : null;
   const bindRoom = (value, url) => {
@@ -64,6 +82,7 @@ const douyinDecoder = (() => {
       if (!candidate.room_id || !candidate.recipient_user_id) return;
       if (room && JSON.stringify(room) !== JSON.stringify(candidate)) { failure("room_identity_changed"); return; }
       room = candidate; status();
+      sdk.reportRoomName?.(r.owner?.nickname||r.owner_user?.nickname);
       sdk.emit("probe.status", "diagnostic", { stage: "room_identity_bound" });
     } catch (_) { /* Unknown JSON shape cannot establish identity. */ }
   };
@@ -74,7 +93,13 @@ const douyinDecoder = (() => {
     if (created && (created < BigInt(Math.floor(Date.now() / 1000) - 30) || created > BigInt(Math.floor(Date.now() / 1000) + 5))) {
       sdk.emit("probe.status", "diagnostic", { stage: "historical_message_ignored" }); return;
     }
-    sdk.emit(type, "network", { ...payload, internal_room_id: roomId, decoder: "douyin.pb.v1", observed_at_ms: Date.now(), live_eligible: !!created }, { native_event_id: native, user_id: who.id, nickname: who.nickname });
+    let fanLevel;
+    if (type === 'chat.received' && room?.room_id === roomId && room.recipient_user_id) {
+      try { const club=sub(sub(who.fields,24),1), level=number(club,2);
+        if(id(club,6)===room.recipient_user_id && level>0n && level<=100000n)fanLevel=Number(level);
+      } catch (_) { /* A malformed badge must not discard the comment. */ }
+    }
+    sdk.emit(type, "network", { ...payload, ...(fanLevel ? {fan_level:fanLevel} : {}), internal_room_id: roomId, decoder: "douyin.pb.v1", observed_at_ms: Date.now(), ...(type === "chat.received" && created ? {message_at_ms: Number(created) * 1000} : {}), live_eligible: !!created }, { native_event_id: native, user_id: who.id, nickname: who.nickname });
     stats.decoded++; status();
     if (["chat.received", "gift.observed", "member.entered"].includes(type) && room?.recipient_user_id) {
       const club = sub(sub(who.fields, 24), 1), level = number(club, 2), anchor = id(club, 6);
@@ -89,7 +114,7 @@ const douyinDecoder = (() => {
   };
   const message = (bytes, socketRoom, responseTime) => {
     const m = pb(bytes), method = text(m, 1, 96);
-    if (!["WebcastGiftMessage", "WebcastChatMessage", "WebcastMemberMessage", "WebcastFansclubMessage", "WebcastControlMessage"].includes(method)) { stats.unsupported++; return; }
+    if (!["WebcastGiftMessage", "WebcastChatMessage", "WebcastMemberMessage", "WebcastFansclubMessage", "WebcastRoomMessage", "WebcastControlMessage"].includes(method)) { stats.unsupported++; return; }
     if (!room) {
       // The room's existing indicator frame exposes decimal room/anchor IDs.
       // Read only these two fields, never its account or token query values.
@@ -146,12 +171,29 @@ const douyinDecoder = (() => {
       // message-level timestamp. Use their WebSocket response's server time
       // only for action=1 entries in this verified room. Buffered old frames
       // still fail emit's age check; do not use local receipt time as proof.
-      emit("member.entered", common, native, user(sub(body, 2)), { recipient_user_id: recipient, label: "native_entry" }, responseTime);
+      const who = user(sub(body, 2));
+      emit("member.entered", common, native, who, { recipient_user_id: recipient, label: "native_entry",
+        ...(starGuardianEntry(body, who, recipient) ? { supporter_title: 'star_guardian' } : {}) }, responseTime);
     } else if (method === "WebcastFansclubMessage") {
       const who = user(sub(body, 4)), club = sub(sub(who.fields, 24), 1), anchor = id(club, 6), kind = number(body, 2);
       if (!recipient || anchor !== recipient || ![1n, 2n].includes(kind)) { stats.unsupported++; return; }
-      if (kind === 2n) emit("fansclub.joined", common, native, who, { recipient_user_id: recipient });
-      else emit("level.upgraded", common, native, who, { recipient_user_id: recipient, level_kind: "fansclub", level_name: "粉丝团", new_level: safeCount(number(club, 2)) });
+      // Like member entries, current fansclub messages can omit create_time.
+      // Use the response server time, retaining the existing historical-frame check.
+      if (kind === 2n) emit("fansclub.joined", common, native, who, { recipient_user_id: recipient }, responseTime);
+      else emit("level.upgraded", common, native, who, { recipient_user_id: recipient, level_kind: "fansclub", level_name: "粉丝团", new_level: safeCount(number(club, 2)) }, responseTime);
+    } else if (method === "WebcastRoomMessage") {
+      // Captured level_up_msg uses the common rich-text user (piece 21/1)
+      // and numeric string (piece 11); ordinary room notices are ignored.
+      if (!recipient || text(body, 20) !== "level_up_msg") { stats.unsupported++; return; }
+      const display = sub(common, 8);
+      if (text(display, 2, 256) !== "恭喜{0:user}刚刚升级至Lv.{1:string}") { stats.unsupported++; return; }
+      const pieces = display.get(4) || [];
+      if (pieces.length !== 2) { stats.unsupported++; return; }
+      const first = pb(pieces[0]), second = pb(pieces[1]);
+      if (number(first, 1) !== 11n || number(second, 1) !== 1n) { stats.unsupported++; return; }
+      const who = user(sub(sub(first, 21), 1)), levelText = text(second, 11, 8);
+      if (!/^[1-9][0-9]{0,4}$/.test(levelText)) { stats.unsupported++; return; }
+      emit("level.upgraded", common, native, who, { recipient_user_id: recipient, level_kind: "wealth", level_name: "用户等级", new_level: Number(levelText) }, responseTime);
     } else if (method === "WebcastControlMessage" && number(body, 2) === 3n) {
       sdk.emit("room.ended", "network", { internal_room_id: roomId, decoder: "douyin.pb.v1", recipient_user_id: recipient || "unknown" });
     }
@@ -167,7 +209,7 @@ const douyinDecoder = (() => {
     } finally { clearTimeout(timer); void reader.cancel().catch(() => {}); }
   };
   const decode = async (data, socketRoom) => {
-    if (stopped || !BOOT.rules_preview) return;
+    if (stopped || !(BOOT.rules_preview || BOOT.unified_ui)) return;
     const size = data?.byteLength ?? data?.size;
     if (!socketRoom || typeof size !== "number" || size > LIMIT) throw Error("websocket_frame_unsupported");
     const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(await data.arrayBuffer());
@@ -184,7 +226,7 @@ const douyinDecoder = (() => {
     status();
   };
   const observe = (data, url) => {
-    if (!BOOT.rules_preview || stopped) return;
+    if (!(BOOT.rules_preview || BOOT.unified_ui) || stopped) return;
     let socketRoom; try { socketRoom = decimal(new URL(url).searchParams.get("room_id")); } catch (_) {}
     if (++queued > 16) { queued--; failure("decoder_queue_full"); return; }
     chain = chain.then(() => decode(data, socketRoom)).catch(e => failure(e.message)).finally(() => { queued--; });

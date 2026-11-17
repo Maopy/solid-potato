@@ -1,3 +1,7 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+mod moderation_client;
+mod moderation_ui;
 mod text_input;
 
 use chrono::Utc;
@@ -769,6 +773,23 @@ fn status_badge(status: TaskStatus) -> gpui::Div {
 }
 
 fn main() {
+    if std::env::args_os()
+        .skip(1)
+        .take(2)
+        .eq(["moderation", "proxy-watchdog"]
+            .into_iter()
+            .map(std::ffi::OsString::from))
+    {
+        if live_archive_core::moderation::proxy_watchdog::run().is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
+    moderation_ui::run();
+}
+
+#[allow(dead_code)]
+fn legacy_main() {
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
         cx.bind_keys([

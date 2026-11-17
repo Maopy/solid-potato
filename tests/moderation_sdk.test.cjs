@@ -29,6 +29,7 @@ function environment() {
     requests.push({ url, body, headers: options.headers });
     return Promise.resolve({ ok: true, json: async () => String(url).endsWith("hello")
       ? { connection_id: "conn", binding_id: "binding", token: "token" }
+      : String(url).endsWith("control") ? {enabled:body.enabled,epoch:requests.filter(r=>r.url.endsWith("control")).length}
       : { acked_seq: body.events?.at(-1)?.seq || 0, commands: [], send_chat: false } });
   };
   const window = { fetch: nativeFetch, WebSocket: Socket, addEventListener() {}, removeEventListener() {} };
@@ -164,4 +165,62 @@ test('public screen counts new rows of every type once, baselines history, and i
  const events=env.requests.filter(r=>r.url.endsWith('events')).flatMap(r=>r.body.events).filter(e=>e.event_type==='public.activity');
  assert.equal(events.length,3);assert.deepEqual(events.map(e=>e.native_event_id),['screen:2','screen:3','screen:4']);
  env.window.__liveArchiveModerationV1.dispose();
+});
+
+
+test('unified public text starts with moderation off and queued observations cannot become replies',async()=>{
+ const env=environment();
+ env.source=env.source.replace('ticket:"ticket"','ticket:"ticket",unified_ui:true,moderation_enabled:false');
+ vm.runInContext(env.source,env.context);await settle();
+ const api=env.window.__liveArchiveModerationV1;
+ assert.equal(api.getStatus().moderation_enabled,false);
+ assert.equal(api.emit('chat.received','network',{content:'关闭期间',live_eligible:true}),true);
+ assert.equal(api.emit('chat.observed','network',{content:'公屏观察'}),true);
+ for(const type of ['chat.keyword_candidate','chat.activity','public.activity','gift.observed','member.entered'])assert.equal(api.emit(type,'network',{}),false);
+ // Flip on before flushing the off-period queue: queued text remains observation only.
+ await api.setModerationEnabled(true);
+ await [...env.timers.values()].find(t=>t.delay===500).fn();await settle();
+ const observed=env.requests.filter(r=>r.url.endsWith('events')).flatMap(r=>r.body.events).filter(e=>e.event_type.startsWith('chat.'));
+ assert.equal(observed.length,2);assert.ok(observed.every(e=>e.event_type==='chat.observed'&&e.payload.live_eligible===false));
+ assert.equal(api.emit('chat.received','network',{content:'开启后',live_eligible:true}),true);
+ await api.setModerationEnabled(false);
+ assert.equal(api.emit('chat.received','network',{content:'再次关闭'}),true);
+ env.window.__liveArchiveModerationV1.dispose();
+ assert.equal(api.emit('chat.received','network',{content:'页面已退出'}),false);
+});
+
+
+for(const platform of ['douyin','wechat'])test(platform+' sends only current host nickname and refreshes it while moderation is off',async()=>{
+ const env=environment();let name='主播小怡';
+ env.source=env.source.replace('ticket:"ticket"',`ticket:"ticket",unified_ui:true,moderation_enabled:false,adapter_id:"${platform==='wechat'?'wechat_channels.desktop_probe':'douyin.live_page'}"`);
+ if(platform==='wechat')env.window.WXU={check_live_existing:()=>[null,{nickname:name,username:'host'},{}]};
+ else env.window.__liveArchiveRecordingController={getAnchorName:()=>name};
+ vm.runInContext(env.source,env.context);await settle();
+ const api=env.window.__liveArchiveModerationV1;
+ const names=()=>env.requests.filter(r=>r.url.endsWith('events')).flatMap(r=>r.body.events).filter(e=>e.event_type==='room.profile').map(e=>e.payload.nickname);
+ assert.deepEqual(names(),['主播小怡']);
+ api.refreshRoomName();await [...env.timers.values()].find(t=>t.delay===(platform==='wechat'?2000:500)).fn();await settle();
+ assert.deepEqual(names(),['主播小怡'],'unchanged nickname is not re-sent every poll');
+ name='主播新昵称';await [...env.timers.values()].find(t=>t.delay===(platform==='wechat'?2000:500)).fn();await settle();
+ assert.deepEqual(names(),['主播小怡','主播新昵称']);
+ env.context.location.pathname='/other';name='另一直播间';api.refreshRoomName();
+ assert.equal(api.getStatus().buffered,0,'leaving the room cannot publish another host name');
+ api.dispose();
+});
+
+test('Douyin rows without the old content class are collected while moderation is off', async () => {
+  const env=environment();
+  env.source=env.source.replace('ticket:"ticket"','ticket:"ticket",unified_ui:true,moderation_enabled:false');
+  let observer;const root={querySelectorAll:()=>[]};
+  env.context.document.querySelector=()=>root;
+  env.context.document.createRange=()=>({setStartAfter(){},setEnd(){},cloneContents:()=>({textContent:'：这首歌叫什么？'}),detach(){}});
+  env.context.MutationObserver=class{constructor(fn){observer=fn;}observe(){}disconnect(){}};
+  const row=new env.context.HTMLElement();row.matches=()=>true;row.childNodes=[{},{}];
+  row.querySelector=selector=>selector.includes('.hts-live-text-user')?{textContent:'小雨：'}:null;
+  vm.runInContext(env.source,env.context);await settle();
+  observer([{addedNodes:[row]}]);await [...env.timers.values()].find(t=>t.delay===500).fn();await settle();
+  const events=env.requests.filter(r=>r.url.endsWith('events')).flatMap(r=>r.body.events).filter(e=>e.event_type==='chat.observed');
+  assert.equal(events.length,1);assert.equal(events[0].payload.content,'这首歌叫什么？');
+  assert.equal(events[0].payload.live_eligible,false);assert.equal(events[0].nickname,'小雨');
+  env.window.__liveArchiveModerationV1.dispose();
 });

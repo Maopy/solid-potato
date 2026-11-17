@@ -1,0 +1,16 @@
+{
+  "provider": "funasr_paraformer",
+  "executable": "../.live-archive-tools/python312/python.exe",
+  "ffmpeg": "C:\\Users\\crazy\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-9.0.2-full_build-shared\\bin\\ffmpeg.EXE",
+  "model": "../.live-archive-models/FunASR-seaco-paraformer",
+  "model_sha256": "3d491689244ec5dfbf9170ef3827c358aa10f1f20e42a7c59e15e688647946d1",
+  "language": "zh",
+  "threads": 4,
+  "use_gpu": true,
+  "runner": "tools/funasr_asr_worker.py",
+  "speaker_model": "../.live-archive-models/FunASR-campplus",
+  "speaker_references": {
+    "992927935592": "../.live-archive-models/FunASR-campplus/xinyi076-reference.json",
+    "v2_060000231003b20faec8c4e58c1fc5d5c90ceb31b077b613236af673de7ff87ff656f63fd05b@finder": "../.live-archive-models/FunASR-campplus/xinyi076-reference.json"
+  }
+}

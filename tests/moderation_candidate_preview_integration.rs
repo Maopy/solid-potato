@@ -560,7 +560,7 @@ async fn confirmed_same_message_growth_restarts_silence_window_but_display_summa
 async fn wechat_arrivals_reach_one_fill_command_after_thirty_seconds() {
     let temp = tempfile::tempdir().unwrap();
     let (mut server, mut client) =
-        setup_with_rules(temp.path(), "rules:\n  welcome:\n    enabled: true\n", true).await;
+        setup_with_rules(temp.path(), "rules:\n  welcome:\n    enabled: true\nnickname_mapping:\n  users:\n    甲: 小甲\n", true).await;
     let arrival = |id: &str, user: &str| {
         json!({"seq":1,"event_id":"fixture","event_type":"member.candidate",
         "source_kind":"network","native_event_id":id,"user_id":user,"nickname":user,
@@ -591,7 +591,31 @@ async fn wechat_arrivals_reach_one_fill_command_after_thirty_seconds() {
         "page_url":"https://channels.weixin.qq.com/web/pages/live","input_ready":true});
     let response = client.post("/v1/poll", poll.clone()).await;
     assert_eq!(response["commands"].as_array().unwrap().len(), 1);
-    assert_eq!(response["commands"][0]["text"], "欢迎甲、乙来到直播间");
+    assert_eq!(response["commands"][0]["text"], "欢迎小甲、乙来到直播间");
+    assert_eq!(client.post("/v1/poll", poll).await["commands"], json!([]));
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn high_fan_badge_welcome_respects_threshold_and_cooldown() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut server, mut client) = setup_with_rules(temp.path(),
+        "rules:\n  welcome: {enabled: false}\n  supporter_welcome:\n    enabled: true\n    min_fansclub_level: 7\n    template: '欢迎 {nickname} 回家！'\n", true).await;
+    let entrance = |id: &str, user: &str, level: i32| {
+        json!({"seq":1,"event_id":id,"event_type":"member.candidate",
+        "source_kind":"network","native_event_id":id,"user_id":user,"nickname":"甲",
+        "payload":{"decoder":"wechat.msg_list.arrival.candidate.v1","message_type":10005,
+            "arrival_text_match":true,"fan_level":level,"observed_at_ms":chrono::Utc::now().timestamp_millis()}})
+    };
+    client
+        .events(vec![entrance("a", "low", 6), entrance("b", "high", 7)])
+        .await;
+    let poll = json!({"v":1,"connection_id":client.hello["connection_id"],"binding_id":client.hello["binding_id"],
+        "page_url":"https://channels.weixin.qq.com/web/pages/live","input_ready":true});
+    let response = client.post("/v1/poll", poll.clone()).await;
+    assert_eq!(response["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(response["commands"][0]["text"], "欢迎 甲 回家！");
+    client.events(vec![entrance("c", "high", 9)]).await;
     assert_eq!(client.post("/v1/poll", poll).await["commands"], json!([]));
     server.stop().await.unwrap();
 }
@@ -602,7 +626,7 @@ async fn supporter_arrival_fills_immediately_and_different_message_or_title_does
     let temp = tempfile::tempdir().unwrap();
     let (mut server, mut client) = setup_with_rules(
         temp.path(),
-        "rules:\n  supporter_welcome:\n    template: '{title}：欢迎{nickname}'\n",
+        "rules:\n  supporter_welcome:\n    template: '{title}：欢迎{nickname}'\nnickname_mapping:\n  users:\n    same-user: 小甲\n",
         true,
     )
     .await;
@@ -622,7 +646,7 @@ async fn supporter_arrival_fills_immediately_and_different_message_or_title_does
         "page_url":"https://channels.weixin.qq.com/web/pages/live","input_ready":true});
     let response = client.post("/v1/poll", poll.clone()).await;
     assert_eq!(response["commands"].as_array().unwrap().len(), 1);
-    assert_eq!(response["commands"][0]["text"], "超粉：欢迎甲");
+    assert_eq!(response["commands"][0]["text"], "超粉：欢迎小甲");
     assert_eq!(response["candidate_preview"]["pending_welcome_users"], 0);
     client.events(vec![entrance("c", "super_fan")]).await;
     assert_eq!(client.post("/v1/poll", poll).await["commands"], json!([]));
@@ -637,21 +661,26 @@ async fn native_upgrade_uses_configured_template_and_enters_fill_queue_once() {
     let temp = tempfile::tempdir().unwrap();
     let (mut server, mut client) = setup_with_rules(temp.path(),
         "rules:\n  welcome:\n    enabled: false\n  upgrade:\n    enabled: true\n    template: '恭喜{nickname}升到{new_level}级'\nnickname_mapping:\n  users:\n    upgrade-user: 测试哥\n", true).await;
-    let notice = |id: &str| json!({"event_type":"level.candidate","source_kind":"network",
+    let notice = |id: &str| {
+        json!({"event_type":"level.candidate","source_kind":"network",
         "native_event_id":id,"user_id":"upgrade-user","nickname":"長**",
         "payload":{"decoder":"wechat.app20031.upgrade.candidate.v1","message_type":20031,
         "upgrade_type":1,"previous_level":0,"new_level":1,"recipient_user_id":"selected-host",
-        "observed_at_ms":chrono::Utc::now().timestamp_millis(),"live_eligible":true,"room_verified":true}});
-    let mut wrong = notice("wrong-host"); wrong["payload"]["recipient_user_id"] = json!("other-host");
-    client.events(vec![wrong, notice("upgrade-a"), notice("upgrade-a")]).await;
+        "observed_at_ms":chrono::Utc::now().timestamp_millis(),"live_eligible":true,"room_verified":true}})
+    };
+    let mut wrong = notice("wrong-host");
+    wrong["payload"]["recipient_user_id"] = json!("other-host");
+    client
+        .events(vec![wrong, notice("upgrade-a"), notice("upgrade-a")])
+        .await;
     let poll = json!({"v":1,"connection_id":client.hello["connection_id"],"binding_id":client.hello["binding_id"],
         "page_url":"https://channels.weixin.qq.com/web/pages/live","input_ready":true});
-    let response = client.post("/v1/poll",poll).await;
-    assert_eq!(response["commands"].as_array().unwrap().len(),1);
-    assert_eq!(response["commands"][0]["text"],"恭喜测试哥升到1级");
-    let c=rusqlite::Connection::open(temp.path().join("probe.sqlite3")).unwrap();
+    let response = client.post("/v1/poll", poll).await;
+    assert_eq!(response["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(response["commands"][0]["text"], "恭喜测试哥升到1级");
+    let c = rusqlite::Connection::open(temp.path().join("probe.sqlite3")).unwrap();
     let count:i64=c.query_row("select count(*) from candidate_draft_audits where json_extract(audit_json,'$.kind')='upgrade_candidate_draft'",[],|r|r.get(0)).unwrap();
-    assert_eq!(count,1);
+    assert_eq!(count, 1);
     server.stop().await.unwrap();
 }
 
@@ -661,56 +690,133 @@ async fn native_upgrade_congratulates_every_distinct_notice_without_level_compar
     let (mut server, mut client) = setup_with_rules(temp.path(),
         "rules:\n  welcome:\n    enabled: false\n  upgrade:\n    enabled: true\n    template: '恭喜{nickname}升到{new_level}级'\n", true).await;
     // Captured notices for the same viewer: 13 -> 16, then 0 -> 10.
-    let notice = |id: &str, before: u64, after: u64| json!({
+    let notice = |id: &str, before: u64, after: u64| {
+        json!({
         "event_type":"level.candidate","source_kind":"network",
         "native_event_id":id,"user_id":"viewer","nickname":"言**",
         "payload":{"decoder":"wechat.app20031.upgrade.candidate.v1","message_type":20031,
         "upgrade_type":1,"previous_level":before,"new_level":after,
-        "recipient_user_id":"selected-host","observed_at_ms":chrono::Utc::now().timestamp_millis()}});
+        "recipient_user_id":"selected-host","observed_at_ms":chrono::Utc::now().timestamp_millis()}})
+    };
     client.events(vec![notice("first", 13, 16)]).await;
     let mut no_previous = notice("no-previous-level", 0, 0);
-    no_previous["payload"].as_object_mut().unwrap().remove("previous_level");
+    no_previous["payload"]
+        .as_object_mut()
+        .unwrap()
+        .remove("previous_level");
     no_previous["payload"]["observed_at_ms"] = json!(1);
-    client.events(vec![notice("second", 0, 10), notice("second", 0, 10),
-        notice("duplicate-level", 0, 16), notice("decrease", 16, 10),
-        notice("unchanged", 10, 10), no_previous]).await;
+    client
+        .events(vec![
+            notice("second", 0, 10),
+            notice("second", 0, 10),
+            notice("duplicate-level", 0, 16),
+            notice("decrease", 16, 10),
+            notice("unchanged", 10, 10),
+            no_previous,
+        ])
+        .await;
     let c = rusqlite::Connection::open(temp.path().join("probe.sqlite3")).unwrap();
     let drafts: Vec<String> = c.prepare(
         "select json_extract(audit_json,'$.text') from candidate_draft_audits where json_extract(audit_json,'$.kind')='upgrade_candidate_draft' order by id"
     ).unwrap().query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
-    assert_eq!(drafts, vec!["恭喜言**升到16级", "恭喜言**升到10级",
-        "恭喜言**升到16级", "恭喜言**升到10级", "恭喜言**升到10级", "恭喜言**升到0级"]);
+    assert_eq!(
+        drafts,
+        vec![
+            "恭喜言**升到16级",
+            "恭喜言**升到10级",
+            "恭喜言**升到16级",
+            "恭喜言**升到10级",
+            "恭喜言**升到10级",
+            "恭喜言**升到0级"
+        ]
+    );
     // Every distinct notice reaches the fill queue; transport retries do not.
-    let pending: i64 = c.query_row("select count(*) from fill_audits where json_extract(audit_json,'$.state')='queued'", [], |row| row.get(0)).unwrap();
+    let pending: i64 = c
+        .query_row(
+            "select count(*) from fill_audits where json_extract(audit_json,'$.state')='queued'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_eq!(pending, 6);
     server.stop().await.unwrap();
 }
 
 #[tokio::test]
 async fn wechat_bootstrap_tickets_keep_room_profiles_isolated_and_fallback_to_defaults() {
-    let temp=tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir().unwrap();
     let (mut server,client)=setup_with_rules(temp.path(),
         "rules:\n  upgrade:\n    template: '默认{nickname}到{new_level}级'\nroom_profiles:\n  special-host:\n    rules:\n      upgrade:\n        template: '专属{nickname}到{new_level}级'\n    timed_messages:\n      min_comments: 19\n",true).await;
-    let mut boots=Vec::new();
-    for host in ["special-host","other-host"] {
-        let mut bridge=server.bridge.lock().unwrap();let relay=bridge.relay_token.clone();
-        let script=bridge.bootstrap_for_room(&relay,Some(host)).unwrap();
-        let boot:Value=serde_json::from_str(script.split("const BOOT = ").nth(1).unwrap().split(";\n").next().unwrap()).unwrap();
-        assert_eq!(boot["room_profile"],if host=="special-host" {"special-host"} else {"default"});
-        if host=="special-host" {assert_eq!(boot["timed_messages"]["min_comments"],19);}
-        boots.push((host,boot));
+    let mut boots = Vec::new();
+    for host in ["special-host", "other-host"] {
+        let mut bridge = server.bridge.lock().unwrap();
+        let relay = bridge.relay_token.clone();
+        let script = bridge.bootstrap_for_room(&relay, Some(host)).unwrap();
+        let boot: Value = serde_json::from_str(
+            script
+                .split("const BOOT = ")
+                .nth(1)
+                .unwrap()
+                .split(";\n")
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            boot["room_profile"],
+            if host == "special-host" {
+                "special-host"
+            } else {
+                "default"
+            }
+        );
+        if host == "special-host" {
+            assert_eq!(boot["timed_messages"]["min_comments"], 19);
+        }
+        boots.push((host, boot));
     }
-    for (host,boot) in boots {
-        let mut page=Client {http:client.http.clone(),base:client.base.clone(),hello:json!({}),seq:0};
+    {
+        let mut bridge = server.bridge.lock().unwrap();
+        let mut rules = live_archive_core::moderation::engine::RulesConfig::default();
+        rules.upgrade_template = "更新{nickname}到{new_level}级".into();
+        assert_eq!(bridge.update_room_rules("special-host", rules).unwrap(), 0);
+    }
+    for (host, boot) in boots {
+        let mut page = Client {
+            http: client.http.clone(),
+            base: client.base.clone(),
+            hello: json!({}),
+            seq: 0,
+        };
         page.hello=page.post("/v1/hello",json!({"v":1,"ticket":boot["ticket"],"document_id":host,
             "adapter_id":"wechat_channels.desktop_probe","page_url":"https://channels.weixin.qq.com/web/pages/live"})).await;
+        if host == "special-host" {
+            let mut rules = live_archive_core::moderation::engine::RulesConfig::default();
+            rules.upgrade_template = "在线{nickname}到{new_level}级".into();
+            assert_eq!(
+                server
+                    .bridge
+                    .lock()
+                    .unwrap()
+                    .update_room_rules(host, rules)
+                    .unwrap(),
+                1
+            );
+        }
         page.events(vec![json!({"event_type":"level.candidate","source_kind":"network","native_event_id":"same-notice",
             "user_id":"user","nickname":"测试哥","payload":{"decoder":"wechat.app20031.upgrade.candidate.v1",
             "message_type":20031,"upgrade_type":1,"previous_level":0,"new_level":1,"recipient_user_id":host,
             "observed_at_ms":chrono::Utc::now().timestamp_millis()}})]).await;
         let response=page.post("/v1/poll",json!({"v":1,"connection_id":page.hello["connection_id"],"binding_id":page.hello["binding_id"],
             "page_url":"https://channels.weixin.qq.com/web/pages/live","input_ready":true})).await;
-        assert_eq!(response["commands"][0]["text"],if host=="special-host" {"专属测试哥到1级"} else {"默认测试哥到1级"});
+        assert_eq!(
+            response["commands"][0]["text"],
+            if host == "special-host" {
+                "在线测试哥到1级"
+            } else {
+                "默认测试哥到1级"
+            }
+        );
     }
     server.stop().await.unwrap();
 }

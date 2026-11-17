@@ -162,6 +162,11 @@ enum ModerationCommand {
         #[arg(long)]
         config: PathBuf,
     },
+    #[command(hide = true)]
+    MigrateRoomOverrides {
+        #[arg(long)]
+        config: PathBuf,
+    },
     /// Read-only source target IDs from the latest run for manual YAML selection.
     InspectGiftTargets {
         #[arg(long)]
@@ -308,6 +313,11 @@ async fn main() -> Result<()> {
                     loaded.tasks.len(),
                     loaded.config.accounts.len()
                 );
+                return Ok(());
+            }
+            ModerationCommand::MigrateRoomOverrides { config } => {
+                live_archive_core::moderation::config::ModerationConfig::load(config)?;
+                live_archive_core::moderation::room_profiles::migrate_legacy_overlays(config)?;
                 return Ok(());
             }
             ModerationCommand::Check { config } => {

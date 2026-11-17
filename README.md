@@ -63,7 +63,7 @@ intercepts page/script traffic; live CDN media is transparently forwarded.
 
 ## 统一场控入口
 
-Windows 发布包双击 `启动场控.cmd`；macOS 双击 `启动场控.command` 或执行 `./run.sh`，同时启动抖音和视频号并打开统一控制页，支持场控开关、录制与共享下载任务。实际房间配置沿用原自动配置；详见 [统一入口说明](docs/moderation-unified.md)。
+Windows 0.5.0 发布包双击 `启动场控.exe`，打开复用 Web 控制页的 Tauri 桌面中控；macOS 双击 `启动场控.command` 或执行 `./run.sh`，打开浏览器控制页。均支持场控开关、录制与共享下载任务。实际房间配置沿用原自动配置；详见 [统一入口说明](docs/moderation-unified.md)。
 
 ## 场控内录制
 
@@ -178,6 +178,10 @@ The 0.3.6 release adds room-scoped periodic random messages with gift priority a
 
 评论关键词自动回复支持抖音、视频号，多个关键词可共用回复并共享冷却。见 [配置说明](docs/moderation-keywords.md)。发布打包继承上一版本 config。
 
+中控支持使用 DeepSeek 自动挑选近期主播语音或公屏留言并生成回复建议，默认每 60 秒最多请求一次，需要人工确认发送。设置方法和费用说明见 [DeepSeek 自动回复建议](docs/moderation-deepseek.md)。
+
 Windows 0.3.68 更新及升级步骤见 [发布说明](docs/moderation-release-0.3.68.md)。
 
 0.3.70 起 Windows 与 Mac Apple Silicon 同步发布，见 [升级说明](docs/moderation-release-0.3.70.md)。
+
+Windows 0.5.11 中控灯牌显示更新见 [发布说明](docs/moderation-release-0.5.11.md)。

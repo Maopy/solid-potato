@@ -1,9 +1,654 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>直播助手 · 统一控制台</title><style>body{font:16px system-ui;background:#f4f6f8;color:#18212b;max-width:960px;margin:36px auto;padding:0 20px}h1{font-size:26px}.rooms{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}section{background:white;border:1px solid #dde3e9;border-radius:12px;padding:20px;margin-bottom:16px}button,a{font:inherit}button{border:1px solid #cbd5df;border-radius:7px;padding:8px 12px;margin:5px 5px 5px 0;cursor:pointer}button.on{background:#087f5b;color:white;border-color:#087f5b}button:disabled{opacity:.5;cursor:default}p{line-height:1.6}.muted{color:#526171}#notice{color:#b54708;white-space:pre-wrap}.task{padding:10px 0;border-top:1px solid #eee;overflow-wrap:anywhere}a{color:#076a9c}</style></head><body><h1>直播助手</h1><p class="muted">抖音与视频号共用此入口。先打开直播页，连接后开启场控；录制独立控制，关闭场控不会停止录制。</p><p id="notice"></p><section id="userscript-setup" hidden><strong>抖音通过用户脚本接入</strong><p>安装 Tampermonkey 后，点击安装场控脚本。安装一次即可；打开任意抖音直播间后刷新页面，每个直播间单独开启场控。</p><a id="userscript-install" target="_blank" rel="noreferrer">安装 / 更新抖音场控脚本</a><p class="muted">请关闭 LiveBot 等其他脚本的自动发送功能，避免重复回复。视频号继续使用代理；抖音无需代理证书。</p></section><div id="rooms" class="rooms"></div><section><h2>下载任务</h2><div id="downloads">暂无录制任务</div></section><p class="muted">结束使用时，在启动终端按 Ctrl-C，等待视频收尾和代理恢复后退出。</p><script>
-const token=location.hash.slice(1);let working=false;
-const notice=document.getElementById('notice');
-async function api(path,body){const response=await fetch('/api/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Error(data.error||'控制台连接失败，请通过启动程序打开本页');return data;}
-function button(label,action,disabled=false){const b=document.createElement('button');b.textContent=label;b.disabled=disabled;b.onclick=async()=>{working=true;b.disabled=true;try{await action();notice.textContent='';}catch(e){notice.textContent=e.message;}finally{working=false;await refresh();}};return b;}
-async function refresh(){if(working)return;try{const state=await api('state');document.getElementById('userscript-setup').hidden=!state.userscript_install_url;if(state.userscript_install_url)document.getElementById('userscript-install').href=state.userscript_install_url;const rooms=document.getElementById('rooms');rooms.replaceChildren();for(const r of state.rooms){const card=document.createElement('section');const h=document.createElement('h2');h.textContent=(r.platform==='douyin'?'抖音':'视频号')+' · '+(r.label||r.id);const s=document.createElement('p');const c=r.control||{};s.textContent=(c.connected_pages?'直播页已连接':'直播页未连接')+' · 场控'+(c.enabled?'已开启':'已关闭')+(c.blocked?' · 发送未确认，已暂停后续发送':'');const link=document.createElement(r.platform==='douyin'?'a':'p');if(r.platform==='douyin'){link.href=r.url;link.target='_blank';link.rel='noreferrer';link.textContent='打开直播页';}else{link.textContent='请在微信中进入要使用的直播间';link.className='muted';}const toggle=button(c.enabled?'关闭场控':'开启场控',()=>api('moderation',{id:r.id,enabled:!c.enabled}));toggle.setAttribute('role','switch');toggle.setAttribute('aria-checked',String(!!c.enabled));if(c.enabled)toggle.className='on';const record=button('录制直播',()=>api('record',{id:r.id}),!c.recording||!c.connected_pages);const feedback=document.createElement('p');feedback.className='muted';feedback.textContent=c.recording_result?.message||'';card.append(h,s,link,document.createElement('br'),toggle,record,feedback);rooms.appendChild(card);}
-const list=document.getElementById('downloads');list.replaceChildren();if(!state.downloads.length)list.textContent='暂无录制任务。进入并播放直播后点击“录制直播”。';for(const task of state.downloads){const row=document.createElement('div');row.className='task';const t=document.createElement('div');const names={waiting:'等待启动',downloading:'录制中',paused:'已暂停',finished:'已完成',failed:'失败'};t.textContent=task.name+' · '+(names[task.status]||task.status)+(task.error?' · '+task.error:'');row.appendChild(t);const action=['waiting','downloading'].includes(task.status)?'pause':'start';row.append(button(action==='pause'?'暂停':'继续',()=>api('download',{id:task.id,action})),button('移除',()=>api('download',{id:task.id,action:'delete'})));list.appendChild(row);}}catch(e){notice.textContent=e.message;}}
-refresh();setInterval(refresh,2000);
-</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>直播助手 · 中控台</title>
+<style>
+:root{font:14px/1.5 system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#23302e;background:#f4f6f5;--line:#e2e8e5;--green:#13765c}
+*{box-sizing:border-box}body{margin:0}button,input,a,select{font:inherit}button,a,input,select{outline-offset:3px}
+button{cursor:pointer;border:1px solid var(--line);border-radius:8px;background:white;color:inherit;padding:7px 11px}
+button:hover{background:#edf6f1}button:disabled{opacity:.5;cursor:default}button.on{background:var(--green);border-color:var(--green);color:white}
+a{color:var(--green)}input,select{border:1px solid var(--line);border-radius:7px;background:white;padding:7px;color:inherit;min-width:0}
+header{height:44px;background:white;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px}
+h1{font-size:18px;margin:0}header small{margin-left:14px;color:#7b8983}nav{display:flex;gap:8px}nav button{border:0}nav button.active{background:#eaf4ef;color:var(--green)}
+#rooms-view{height:calc(100dvh - 44px);display:flex;flex-direction:column;padding:0 16px 10px;gap:8px}
+.workspace-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:7px}
+.workspace-bar strong{font-size:15px}.workspace-bar small{margin-left:12px;color:#819088}.layout-switch{display:flex;padding:3px;background:#e8eeea;border-radius:9px;gap:2px}
+.layout-switch button{border:0;background:transparent;padding:3px 12px;color:#74817b}.layout-switch button.active{color:var(--green);background:white;box-shadow:0 1px 4px #183d2420}
+#panels{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;flex:1;min-height:0}#panels.dual{grid-template-columns:repeat(2,minmax(0,1fr))}
+.room-panel{background:white;border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:0;min-width:0;display:flex;flex-direction:column}
+.room-head{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:2px;padding:7px 12px;border-bottom:1px solid var(--line)}.room-head>.muted{grid-column:1 / -1;grid-row:2}.room-heading{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:0}
+.room-identity{display:flex;align-items:center;gap:6px;min-width:0}.slot-number{background:#eaf3ed;color:#498067;border-radius:7px;padding:2px 7px;font-size:11px}
+.room-select{font-size:15px;font-weight:600;border:1px solid transparent;padding:2px 16px 2px 2px;max-width:100%;text-overflow:ellipsis;color:#243d30}
+.room-select:hover{border-color:var(--line);background:#f7faf8}.platform-tag{font-size:10px;padding:2px 5px;background:#f2f5f3;color:#708578;border-radius:5px;white-space:nowrap}
+.muted{color:#74817b;font-size:12px}.actions{display:flex;grid-column:2;grid-row:1;gap:5px;flex-wrap:wrap;margin-top:0;align-items:center}.actions button{font-size:11px;padding:4px 7px}.actions a{font-size:11px;margin-left:3px}
+#notice{margin:0;color:#ad4c28;font-size:13px;padding:0 24px}#notice:empty{display:none}
+.toolbar{padding:6px 12px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+.search{width:150px;flex:1;min-width:100px;background:#fafcfb;padding:5px 7px;font-size:12px}.filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.filters label{display:flex;align-items:center;gap:4px;font-size:12px}.filters button{font-size:12px;border:0;padding:4px 6px;color:#647a6b}
+input[type=checkbox]{accent-color:var(--green)}.live-label{color:var(--green);font-size:11px;white-space:nowrap}.range{display:flex;align-items:center;gap:8px;padding:0 20px 12px;flex-wrap:wrap}.range label{font-size:12px}.range input{max-width:200px}.range button{font-size:12px}
+.timeline{overflow:auto;flex:1;min-height:150px;overflow-anchor:none;scroll-behavior:auto}.moment{display:grid;grid-template-columns:70px minmax(0,1fr);padding:4px 12px;align-items:start}
+.moment time{font-size:11px;font-variant-numeric:tabular-nums;color:#93a198;padding-top:6px}.moment time small{display:block;font-size:10px}.events{min-width:0}
+.entry{display:block;border:1px solid transparent;text-align:left;padding:5px 10px;margin:0 0 2px;width:100%;overflow-wrap:anywhere;border-radius:7px;white-space:pre-wrap}
+.entry.speech{background:#f0f7f2;color:#294f3b;padding:7px 11px}.entry.chat{background:transparent;padding:3px 10px;color:#3b4d42}.entry.chat:hover{background:#f7faf8}
+.entry.selected,.entry.related{border-color:#69a58a;background:#e9f5ee}.entry strong{font-size:12px;color:#738779;margin-right:9px;font-weight:500}.entry .speaker-label{color:#649078;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.speech-icon{width:16px;height:16px;flex-shrink:0}
+.attention-score{display:inline-block;float:right;margin:1px 0 0 8px;padding:0 5px;border-radius:4px;background:#edf3ef;color:#557563;font-size:11px;line-height:18px;font-variant-numeric:tabular-nums}.attention-score.high{background:#dcefe3;color:#13765c;font-weight:600}.attention-score.muted{background:#f4f5f4;color:#929c96}
+.entry.chat{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:start;gap:6px}.message-content{border:0;padding:0;background:transparent;text-align:left;min-width:0;overflow-wrap:anywhere;border-radius:0}.message-content:hover{background:transparent}.reply-trigger{border:0;background:transparent;color:var(--green);font-size:11px;padding:1px 3px;white-space:nowrap}.entry.chat .attention-score{float:none;margin:1px 0 0}.reply-box{grid-column:1/-1;border-top:1px solid #e1ebe5;margin-top:2px;padding-top:7px;font-size:12px;cursor:auto}.reply-context{font-size:11px;color:#87958c;margin-bottom:5px}.reply-option{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 8px;padding:6px 8px;margin:4px 0;border-radius:6px;background:#f0f6f2}.reply-option b{font-size:11px;color:#58846c;font-weight:500}.reply-option p{grid-column:1;margin:0;overflow-wrap:anywhere}.reply-copy{grid-column:2;grid-row:1/3;align-self:center;padding:2px 6px;font-size:11px}.panel-footer[hidden]{display:none}
+.reply-ai{display:inline-flex;align-items:center;justify-content:center;width:25px;height:23px;padding:1px;color:var(--green);border-radius:5px}.reply-ai svg{width:20px;height:20px}.reply-ai:hover,.reply-ai[aria-expanded="true"]{background:#e1efe7}
+.note{color:#8a938e;font-size:12px;padding:4px 10px}.empty{text-align:center;padding:65px 20px;color:#89958f}.empty strong{display:block;font-size:16px;color:#53695d;margin-bottom:8px}
+details summary{cursor:pointer;color:var(--green);font-size:12px;padding:4px 10px}
+.panel-footer{display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-top:1px solid var(--line);gap:10px;font-size:11px;color:#819088;min-height:32px;flex-wrap:wrap}
+.return-live{background:var(--green);color:white;border:0;font-size:12px}.workspace-foot{font-size:11px;color:#8a978e;text-align:center}
+#downloads-view{padding:28px;max-width:1000px;margin:auto}#downloads-view h2{font-size:22px}.task,#userscript-setup{padding:18px;background:white;border:1px solid var(--line);border-radius:10px;margin:12px 0}.task button{margin:10px 8px 0 0}.task-title{overflow-wrap:anywhere}
+body [hidden]{display:none!important}
+@media(min-width:1200px){#panels:not(.dual){max-width:1040px;width:100%;align-self:center}}
+@media(max-width:850px){header{padding:0 16px}header small{display:none}#rooms-view{padding:0 12px 12px;gap:10px}.workspace-bar{padding-top:7px}.workspace-bar small{display:none}#panels{gap:10px}.room-head{padding:7px 10px;grid-template-columns:minmax(0,1fr)}.room-head>.muted{grid-row:auto}.actions{grid-column:1;grid-row:auto}.room-select{font-size:15px}.toolbar{padding:6px 10px}.moment{grid-template-columns:56px minmax(0,1fr);padding:4px 10px}.filters{gap:7px}.panel-footer{padding:5px 10px}.platform-tag{display:none}}
+@media(max-width:620px){#panels.dual{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}.dual .room-head{padding:8px 10px}.dual .room-heading{margin-bottom:0}.dual .actions{margin-top:2px;gap:5px}.dual .actions button{padding:4px 7px}.dual .toolbar{padding:6px 10px;gap:5px}.dual .search{padding:4px 7px;width:100%;flex:auto}.dual .timeline{min-height:60px}.dual .panel-footer{padding:5px 10px;min-height:32px}.workspace-foot{display:none}.workspace-bar strong{font-size:13px}.layout-switch button{padding:5px 9px}}
+/* Dark surfaces shared with the desktop control room. */
+:root{color-scheme:dark;color:#e0ebe6;background:#111916;--line:#30443a;--green:#69d6a2}
+button,input,select{background:#1a2821;color:#e0ebe6}button:hover{background:#263e31}button.on{background:#24865b;border-color:#24865b;color:#fff}
+header,.room-panel,.task,#userscript-setup{background:#18231e}header small,.workspace-bar small,.muted,.note,.workspace-foot{color:#91a79a}
+nav button.active{background:#284b39;color:#91e4b8}.layout-switch{background:#202f27}.layout-switch button{color:#9fb2a7}.layout-switch button.active{background:#365b45;color:#b5efcb}
+.slot-number{background:#263f31;color:#a4d9b5}.room-select{color:#e0ebe6}.room-select:hover{background:#263b2f}.platform-tag{background:#27382e;color:#aac9b7}
+.search{background:#131f19}.filters button{color:#a4b9ac}.moment time{color:#859a8c}
+.entry.speech{background:#203e2e;color:#d3ebdb}.entry.chat{color:#d4e1d8}.entry.chat:hover{background:#203128}
+.entry.selected,.entry.related{border-color:#65be8a;background:#294b37}.entry strong,.entry .speaker-label{color:#96bba4}
+.attention-score{background:#2a4033;color:#b9d8c4}.attention-score.high{background:#2d5d42;color:#a8efc0}.attention-score.muted{background:#2b3530;color:#aab8ad}
+.reply-box{border-color:#344b3d}.reply-option{background:#24382b}.reply-option b{color:#a7d9b7}.reply-ai:hover,.reply-ai[aria-expanded="true"]{background:#345a40}
+.empty{color:#96aa9c}.empty strong{color:#d1e2d6}.panel-footer{border-color:var(--line);color:#91a99a}.return-live{background:#24865b;color:white}#notice{color:#ffb18a}
+/* Ayu Dark-inspired palette, shared with the desktop client. */
+:root{color:#e6e1cf;background:#0b0e14;--line:#293544;--green:#ffb454}
+button,input,select{background:#18212c;color:#e6e1cf}button:hover{background:#283442}button.on{background:#805923;border-color:#805923;color:#fff}
+header,.room-panel,.task,#userscript-setup{background:#111720}header small,.workspace-bar small,.muted,.note,.workspace-foot{color:#8a9aa9}
+nav button.active{background:#30333a;color:#ffcc66}.layout-switch{background:#17202a}.layout-switch button{color:#9baab8}.layout-switch button.active{background:#3d4148;color:#ffcc66}
+.slot-number{background:#29313b;color:#e6b450}.room-select{color:#e6e1cf}.room-select:hover{background:#283442}.platform-tag{background:#29313b;color:#9baab8}
+.search{background:#0d141c}.filters button{color:#9baab8}.moment time{color:#8a9aa9}
+.entry.speech{background:#1c2935;color:#e6e1cf}.entry.chat{color:#e6e1cf}.entry.chat:hover{background:#17202a}
+.entry.selected,.entry.related{border-color:#e6b450;background:#30333a}.entry strong,.entry .speaker-label{color:#ffb454}
+.attention-score{background:#29313b;color:#d2d6dc}.attention-score.high{background:#4a3a25;color:#ffcc66}.attention-score.muted{background:#26313a;color:#9baab8}
+.reply-box{border-color:#344354}.reply-option{background:#1c2935}.reply-option b{color:#ffcc66}.reply-ai:hover,.reply-ai[aria-expanded="true"]{background:#3d4148}
+.empty{color:#8a9aa9}.empty strong{color:#e6e1cf}.panel-footer{border-color:var(--line);color:#8a9aa9}.return-live{background:#805923;color:white}#notice{color:#ffad8e}
+/* Blue denotes ordinary information; amber and red are reserved for warnings and errors. */
+:root{--green:#73d0ff;--info:#73d0ff;--warning:#ffcc66;--error:#f07178}
+nav button.active,.layout-switch button.active{background:#20374a;color:#a7dfff}
+button.on,.return-live{background:#245b7a;border-color:#245b7a;color:#fff}
+.slot-number{color:#73d0ff}.entry.selected,.entry.related{border-color:#73d0ff;background:#203748}
+.entry strong,.entry .speaker-label,.reply-option b{color:#a6cce2}
+.attention-score,.attention-score.high{background:#20394b;color:#a7dfff}.reply-ai:hover,.reply-ai[aria-expanded="true"]{background:#233e50}
+.attention-score.warning{background:#493a20;color:#ffcc66}.attention-score.error{background:#45252b;color:#f07178}
+.state-warning{color:var(--warning)}.state-error,#notice{color:var(--error)}
+.fan-badge{display:inline-flex;vertical-align:middle;align-items:center;justify-content:center;min-width:25px;height:19px;padding:0 5px 2px;margin-right:5px;clip-path:polygon(50% 0,100% 16%,100% 70%,86% 86%,50% 100%,14% 86%,0 70%,0 16%);background:linear-gradient(145deg,#ffd985,#e98a37);color:#40270f;font-size:10px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;white-space:nowrap}.entry.chat{align-items:center}.entry.chat .message-content{line-height:23px}.entry.chat .attention-score{margin:0;align-self:center;line-height:20px}.entry.chat .reply-ai{align-self:center}
+.rule-dialog{width:min(600px,94vw);max-height:85vh;overflow:auto;border:1px solid var(--line);border-radius:12px;background:#17202a;color:#e6e1cf;padding:20px}.rule-dialog::backdrop{background:#0009}.rule-dialog h2{margin:0 0 12px;font-size:17px}.rule-dialog h3{font-size:15px;margin:18px 0 8px}.rule-dialog label{display:flex;align-items:center;gap:8px;margin:10px 0}.rule-dialog .rule-text{display:grid;gap:4px}.rule-dialog .rule-text input,.rule-dialog .rule-text textarea,.rule-dialog select{width:100%}.rule-dialog textarea{font:inherit;background:#0d141c;color:#e6e1cf;border:1px solid var(--line);border-radius:7px;padding:7px;min-height:70px;resize:vertical}.rule-dialog .rule-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.rule-dialog .rule-error{color:#f07178;min-height:1.5em}.keyword-row{border:1px solid var(--line);border-radius:8px;padding:8px;margin:8px 0}
+</style>
+</head>
+<body>
+<header><h1>直播助手 <small>中控台 / 实时内容</small></h1><nav><button id="tab-rooms" class="active">直播间</button><button id="tab-downloads">下载任务</button><button id="deepseek-settings">AI 设置</button></nav></header>
+<p id="notice" role="status"></p>
+<div id="rooms-view">
+  <div class="workspace-bar"><div><strong id="workspace-status">直播间</strong><small>每个窗口可独立切换直播间</small></div><div class="layout-switch" role="group" aria-label="直播间显示数量"><button id="layout-single">单直播间</button><button id="layout-double" class="active">双直播间</button></div></div>
+  <div id="panels"></div>
+  <div class="workspace-foot">语音按说完时间排列，可能有播放延迟 · 每个直播间保留最近 30 分钟</div>
+</div>
+<div id="downloads-view" hidden><section id="userscript-setup" hidden><strong>抖音通过用户脚本接入</strong><p>安装 Tampermonkey 后安装脚本，再打开抖音直播间并刷新页面。</p><a id="userscript-install" target="_blank" rel="noreferrer">安装 / 更新抖音场控脚本</a><p class="muted">视频号请在微信中进入要使用的直播间。</p></section><h2>下载任务</h2><div id="downloads"></div><p id="exit-hint" class="muted">结束使用时，在启动终端按 Ctrl-C，等待视频收尾和代理恢复后退出。</p></div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const RETENTION_MS = 30 * 60 * 1000;
+// Chat becomes stale more quickly than speech, which can arrive after transcription.
+const suggestionMaxAge = entry => entry.kind === 'chat' ? 15000 : 30000;
+const token = location.hash.slice(1), views = new Map(), panels = new Map();
+if (new URLSearchParams(location.search).get('desktop') === '1') $('exit-hint').textContent = '结束使用时关闭窗口，等待视频收尾和代理恢复。';
+let state = {rooms: [], downloads: []}, slots = [null, null], layoutMode = 'double', busy = false, tab = 'rooms';
+let pendingRoomSettings = new URLSearchParams(location.search).get('settings');
+const speechNames = {off:'未开启', starting:'模型准备中', listening:'等待说话', transcribing:'识别中', error:'识别异常', disconnected:'连接中断'};
+
+async function api(path, body) {
+  const response = await fetch('/api/' + path, {
+    method: body ? 'POST' : 'GET',
+    headers: {Authorization:'Bearer ' + token, ...(body ? {'Content-Type':'application/json'} : {})},
+    ...(body ? {body:JSON.stringify(body)} : {})
+  });
+  const value = await response.json();
+  if (!response.ok) throw Error(value.error || '中控连接失败，请通过启动程序打开本页');
+  return value;
+}
+function view(id) {
+  if (!views.has(id)) views.set(id, {entries:[], query:'', from:'', to:'', compose:'', speech:true, chat:true, following:true, anchorIds:new Set(), scroll:0, selected:null, signature:'', range:false, expanded:new Set(), requestVersion:0});
+  return views.get(id);
+}
+function el(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (cls) node.className = cls;
+  return node;
+}
+async function openDeepSeekSettings() {
+  const dialog = el('dialog', undefined, 'rule-dialog');
+  const title = el('h2', 'DeepSeek 设置');
+  const status = el('p', '正在读取设置…', 'muted');
+  const label = el('label', 'API Key', 'rule-text');
+  const key = el('input'); key.type = 'password'; key.autocomplete = 'off'; key.placeholder = '输入新密钥'; key.maxLength = 512; label.append(key);
+  const hint = el('p', '密钥保存在本机系统凭据管理器中，保存后不会显示原文。', 'muted');
+  const error = el('p', '', 'rule-error');
+  const buttons = el('div', undefined, 'rule-buttons');
+  const remove = el('button', '删除密钥'), close = el('button', '关闭'), save = el('button', '保存密钥');
+  buttons.append(remove, close, save); dialog.append(title, status, label, hint, error, buttons); document.body.append(dialog);
+  dialog.addEventListener('close', () => { key.value = ''; dialog.remove(); });
+  close.onclick = () => dialog.close();
+  const showStatus = configured => { status.textContent = configured ? '已配置密钥，可输入新密钥替换。' : '尚未配置密钥。'; remove.disabled = !configured; };
+  save.onclick = async () => { save.disabled = true; error.textContent = ''; try { const result = await api('deepseek-key', {action:'save',key:key.value}); key.value = ''; showStatus(result.configured); } catch (e) { error.textContent = e.message; } finally { save.disabled = false; } };
+  remove.onclick = async () => { remove.disabled = true; error.textContent = ''; try { const result = await api('deepseek-key', {action:'delete'}); key.value = ''; showStatus(result.configured); } catch (e) { error.textContent = e.message; remove.disabled = false; } };
+  dialog.showModal();
+  try { showStatus((await api('deepseek-key')).configured); } catch (e) { status.textContent = ''; error.textContent = e.message; }
+}
+$('deepseek-settings').onclick = () => { void openDeepSeekSettings(); };
+function fanBadge(level) {
+  const badge = el('span', String(level), 'fan-badge');
+  badge.setAttribute('aria-label', '灯牌 ' + level + ' 级');
+  badge.title = '灯牌 ' + level + ' 级';
+  return badge;
+}
+function displayTime(entry) { return entry.kind === 'speech' ? entry.end_ms : entry.at_ms; }
+function clock(ms) { return new Date(ms).toLocaleTimeString('zh-CN', {hour12:false}); }
+function action(label, fn, disabled = false, on = false) {
+  const button = el('button', label, on ? 'on' : '');
+  button.disabled = disabled || busy;
+  button.onclick = async () => {
+    if (busy) return;
+    busy = true; button.disabled = true;
+    try { await fn(); $('notice').textContent = ''; }
+    catch (error) { $('notice').textContent = error.message === 'unknown room' ? '直播间已关闭或断开，请选择当前直播间' : error.message; }
+    finally { busy = false; await refresh(); }
+  };
+  return button;
+}
+function visibleRooms() { return slots.slice(0, layoutMode === 'double' && state.rooms.length > 1 ? 2 : 1).filter(Boolean); }
+function normalizeSlots() {
+  const ids = state.rooms.map(r => r.id);
+  for (let i = 0; i < 2; i++) {
+    if (!ids.includes(slots[i]) || (i === 1 && slots[i] === slots[0])) slots[i] = ids.find(id => id !== slots[1-i]) || null;
+  }
+  if (!slots[0] && slots[1]) [slots[0], slots[1]] = [slots[1], null];
+}
+function switchRoom(index, id) {
+  const previous = slots[index], other = 1 - index;
+  if (slots[other] === id) slots[other] = previous;
+  slots[index] = id;
+  reconcilePanels();
+  void loadVisibleTimelines();
+}
+function reconcilePanels() {
+  normalizeSlots();
+  const visible = visibleRooms();
+  for (const panel of panels.values()) view(panel.id).scroll = panel.list.scrollTop;
+  for (const [id, panel] of panels) if (!visible.includes(id)) {
+    view(id).scroll = panel.list.scrollTop;
+    panel.observer.disconnect(); panel.root.remove(); panels.delete(id);
+  }
+  $('panels').classList.toggle('dual', visible.length === 2);
+  $('workspace-status').textContent = '直播间 · ' + state.rooms.filter(r => r.control?.connected_pages).length + ' 个已连接';
+  for (const mode of ['single', 'double']) {
+    $('layout-' + mode).classList.toggle('active', layoutMode === mode);
+    $('layout-' + mode).setAttribute('aria-pressed', String(layoutMode === mode));
+  }
+  const created = [];
+  for (const [index, id] of visible.entries()) {
+    const exists = panels.has(id);
+    const panel = panels.get(id) || createPanel(id);
+    if (!exists) created.push(panel);
+    panel.index = index;
+    const target = $('panels').children[index];
+    if (target !== panel.root) $('panels').insertBefore(panel.root, target || null);
+    drawHeader(panel);
+  }
+  for (const panel of created) render(panel);
+  for (const panel of panels.values()) {
+    const v = view(panel.id); panel.list.scrollTop = v.following ? panel.list.scrollHeight : v.scroll;
+  }
+  if (!visible.length) {
+    $('panels').replaceChildren(el('div', '暂无直播间。打开已配置的直播页后会出现在这里。抖音脚本安装入口在“下载任务”中。', 'empty'));
+  } else {
+    for (const node of [...$('panels').children]) if (!node.classList.contains('room-panel')) node.remove();
+  }
+}
+function createPanel(id) {
+  const root = el('section', undefined, 'room-panel');
+  root.dataset.roomId = id;
+  const head = el('div', undefined, 'room-head');
+  const toolbar = el('div', undefined, 'toolbar');
+  const search = el('input', undefined, 'search');
+  search.type = 'search'; search.placeholder = '搜索语音、用户或留言'; search.setAttribute('aria-label', '搜索语音、用户或留言');
+  const filters = el('div', undefined, 'filters');
+  const speech = el('input'), chat = el('input');
+  for (const [input, labelText] of [[speech, '主播语音'], [chat, '公屏留言']]) {
+    input.type = 'checkbox'; const label = el('label'); label.append(input, document.createTextNode(labelText)); filters.append(label);
+  }
+  const rangeToggle = el('button', '时间范围'); filters.append(rangeToggle);
+  const follow = el('span', undefined, 'live-label'); toolbar.append(search, filters, follow);
+  const range = el('div', undefined, 'range'), from = el('input'), to = el('input');
+  for (const [input, labelText] of [[from, '从 '], [to, '到 ']]) {
+    input.type = 'datetime-local'; input.step = '1'; const label = el('label', labelText); label.append(input); range.append(label);
+  }
+  const clear = el('button', '清除时间'); range.append(clear);
+  const list = el('div', undefined, 'timeline'); list.tabIndex = 0; list.setAttribute('aria-label', '直播间内容时间线');
+  const assistant = el('div', undefined, 'toolbar');
+  const enabled = el('input'); enabled.type = 'checkbox';
+  view(id).deepseekEnabled = false;
+  const enabledLabel = el('label', '自动生成建议 '); enabledLabel.prepend(enabled);
+  const interval = el('input'); interval.type = 'number'; interval.min = '10'; interval.max = '3600'; interval.value = localStorage.getItem('deepseek_interval_seconds') || '60'; interval.style.width = '70px'; interval.setAttribute('aria-label','生成间隔秒数');
+  const intervalLabel = el('label', '间隔（秒）'); intervalLabel.append(interval);
+  const source = el('select'); source.setAttribute('aria-label','建议来源');
+  for (const [value,label] of [['both','主播和公屏'],['speech','仅主播'],['chat','仅公屏']]) { const option = el('option',label); option.value=value; source.append(option); }
+  const suggestion = el('span', '开启后自动挑选近期内容，生成建议供确认', 'muted');
+  enabled.onchange = () => { view(id).deepseekEnabled = enabled.checked; view(id).deepseekNext = Date.now(); suggestion.textContent = enabled.checked ? '等待近期消息' : '已关闭自动建议'; };
+  interval.onchange = () => { const n = Number(interval.value); interval.value = Number.isInteger(n) && n >= 10 && n <= 3600 ? String(n) : '60'; localStorage.setItem('deepseek_interval_seconds', interval.value); };
+  assistant.append(enabledLabel, intervalLabel, source, suggestion);
+  const footer = el('div', undefined, 'panel-footer'), back = el('button', '回到实时', 'return-live');
+  const compose=el('input'); compose.type='text'; compose.placeholder='输入要发送到此直播间的文字'; compose.setAttribute('aria-label','发送文字'); compose.value=view(id).compose;
+  compose.addEventListener('input',()=>{view(id).compose=compose.value;});
+  const send=action('发送',async()=>{const text=compose.value;await api('send-message',{id,text});if(compose.value===text){compose.value='';view(id).compose='';} $('notice').textContent='已加入发送队列，等待直播页处理';});
+  footer.append(back,compose,send); root.append(head, toolbar, range, list, assistant, footer);
+  const panel = {id, root, head, search, speech, chat, range, from, to, follow, list, footer, back, compose, enabled, interval, source, suggestion};
+  panels.set(id, panel);
+  panel.observer = new ResizeObserver(() => {
+    if (list.isConnected && view(id).following) list.scrollTop = list.scrollHeight;
+  });
+  panel.observer.observe(list);
+  for (const [input, key] of [[search, 'query'], [from, 'from'], [to, 'to'], [speech, 'speech'], [chat, 'chat']]) {
+    input.addEventListener(input === search ? 'input' : 'change', () => {
+      pause(panel); view(id)[key] = input.type === 'checkbox' ? input.checked : input.value; render(panel, 0);
+    });
+  }
+  rangeToggle.onclick = () => { view(id).range = !view(id).range; syncFilters(panel); };
+  clear.onclick = () => { view(id).from = ''; view(id).to = ''; syncFilters(panel); render(panel, 0); };
+  back.onclick = () => {
+    const v = view(id); v.query = ''; v.from = ''; v.to = ''; v.following = true; v.selected = null; v.anchorIds.clear(); syncFilters(panel); render(panel);
+  };
+  list.addEventListener('scroll', () => {
+    if (!list.isConnected) return;
+    view(id).scroll = list.scrollTop;
+    if (list.scrollHeight - list.clientHeight - list.scrollTop > 35) pause(panel);
+  }, {passive:true});
+  syncFilters(panel);
+  // Rendering waits until both pane headers are mounted so scroll measurements are valid.
+  $('panels').append(root);
+  return panel;
+}
+function syncFilters(panel) {
+  const v = view(panel.id);
+  panel.search.value = v.query; panel.from.value = v.from; panel.to.value = v.to;
+  panel.speech.checked = v.speech; panel.chat.checked = v.chat; panel.range.hidden = !v.range;
+}
+function roomName(room) {
+  if(room.anchor_name)return room.anchor_name;
+  return room.label && room.label!==room.id && !/^直播间\s*\d+$/.test(room.label) ? room.label : '等待主播昵称';
+}
+async function openRules(room) {
+  const data = await api('room-settings', {id:room.id});
+  if (data.settings_error) throw Error(data.settings_error);
+  if (!data.rooms?.length) throw Error('请先打开直播页并等待识别主播');
+  const dialog = el('dialog', undefined, 'rule-dialog');
+  dialog.setAttribute('aria-label', '直播间规则设置');
+  dialog.append(el('h2', '直播间规则设置'));
+  const select = el('select');
+  for (const [i, item] of data.rooms.entries()) { const option=el('option',data.rooms.length===1?roomName(room):'直播间 '+(i+1)+' · '+item.room_id); option.value=String(i); select.append(option); }
+  if (data.rooms.length>1) { const label=el('label','选择直播间'); label.append(select); dialog.append(label); }
+  const fields=el('div'), error=el('div',undefined,'rule-error');
+  let inputs={}, timedInputs={}, keywordInputs={}, keywordRows=[], likeInputs={};
+  function renderFields() {
+    fields.replaceChildren(); inputs={}; const settings=data.rooms[Number(select.value)||0].rules;
+    for(const [key,label,value] of [
+      ['gift_enabled','礼物感谢',settings.gift.enabled],
+      ['gift_variation_enabled','按礼物价值选择感谢文案',settings.gift.variation_enabled],
+      ['gift_show_quantity','显示礼物数量',settings.gift.show_quantity],
+      ['welcome_enabled','普通进场欢迎',settings.welcome.enabled],
+      ['supporter_welcome_enabled','身份欢迎',settings.supporter_welcome.enabled],
+      ['fansclub_joined_enabled','粉丝团欢迎',settings.fansclub_joined.enabled]]) {
+      const row=el('label'), input=el('input'); input.type='checkbox'; input.checked=!!value; inputs[key]=input; row.append(input,document.createTextNode(label)); fields.append(row);
+    }
+    for(const [key,label,value] of [
+      ['gift_template','礼物感谢模板',settings.gift.template],
+      ['overflow_template','礼物较多时的备用模板',settings.gift.overflow_template],
+      ['welcome_template','普通欢迎模板',settings.welcome.template],
+      ['supporter_welcome_template','身份欢迎模板',settings.supporter_welcome.template],
+      ['fansclub_joined_template','粉丝团欢迎模板',settings.fansclub_joined.template],
+      ['upgrade_template','升级感谢模板',settings.upgrade.template]]) {
+      const row=el('label',label,'rule-text'), input=el('input'); input.value=value||''; input.maxLength=512; inputs[key]=input; row.append(input); fields.append(row);
+    }
+    const roomSettings=data.rooms[Number(select.value)||0], timed=roomSettings.timed_messages, keyword=roomSettings.keyword_replies;
+    fields.append(el('h3','定时文案'));
+    const timedEnabled=el('input');timedEnabled.type='checkbox';timedEnabled.checked=timed.enabled;timedInputs.enabled=timedEnabled;
+    const timedLabel=el('label');timedLabel.append(timedEnabled,document.createTextNode('开启定时文案'));fields.append(timedLabel);
+    for(const [key,label,value] of [['interval_seconds','发送间隔（秒）',timed.interval_seconds],['min_comments','每轮需要的评论条数',timed.min_comments]]){
+      const row=el('label',label,'rule-text'), input=el('input');input.type='number';input.min=key==='min_comments'?'0':'1';input.value=String(value);timedInputs[key]=input;row.append(input);fields.append(row);
+    }
+    const scopeRow=el('label','计数范围','rule-text'), scope=el('select');
+    for(const [value,label] of [['comments','有效观众评论'],['text_comments','所有文字评论'],['public_screen','公屏消息']]){const option=el('option',label);option.value=value;scope.append(option);}scope.value=timed.count_scope;timedInputs.count_scope=scope;scopeRow.append(scope);fields.append(scopeRow);
+    const messagesRow=el('label','定时文案（每行一条）','rule-text'), messages=el('textarea');messages.value=timed.messages.join('\n');timedInputs.messages=messages;messagesRow.append(messages);fields.append(messagesRow);
+    fields.append(el('h3','关键词回复'));
+    const keywordEnabled=el('input');keywordEnabled.type='checkbox';keywordEnabled.checked=keyword.enabled;keywordInputs.enabled=keywordEnabled;
+    const keywordLabel=el('label');keywordLabel.append(keywordEnabled,document.createTextNode('开启关键词回复'));fields.append(keywordLabel);
+    const coolRow=el('label','回复冷却（秒）','rule-text'), cool=el('input');cool.type='number';cool.min='1';cool.value=String(keyword.cooldown_seconds);keywordInputs.cooldown_seconds=cool;coolRow.append(cool);fields.append(coolRow);
+    const rows=el('div');keywordRows=[];
+    function addKeyword(rule={keywords:[],reply:'',match_mode:'contains'}){
+      const box=el('div',undefined,'keyword-row'), wordsLabel=el('label','关键词（用逗号分隔）','rule-text'), words=el('input');words.value=rule.keywords.join('，');wordsLabel.append(words);
+      const replyLabel=el('label','回复文案','rule-text'), reply=el('input');reply.value=rule.reply;replyLabel.append(reply);
+      const modeLabel=el('label','匹配方式','rule-text'), mode=el('select');for(const [value,label] of [['contains','包含关键词'],['exact','完全相同']]){const o=el('option',label);o.value=value;mode.append(o);}mode.value=rule.match_mode;modeLabel.append(mode);
+      const remove=el('button','删除规则');remove.type='button';const entry={box,words,reply,mode};remove.onclick=()=>{keywordRows=keywordRows.filter(item=>item!==entry);box.remove();};keywordRows.push(entry);box.append(wordsLabel,replyLabel,modeLabel,remove);rows.append(box);
+    }
+    keyword.rules.forEach(addKeyword);const add=el('button','添加关键词规则');add.type='button';add.onclick=()=>addKeyword();fields.append(rows,add);
+    fields.append(el('h3','点赞设置'));
+    const likes=roomSettings.likes, likeEnabled=el('input');likeEnabled.type='checkbox';likeEnabled.checked=likes.enabled;likeInputs.enabled=likeEnabled;
+    const likeLabel=el('label');likeLabel.append(likeEnabled,document.createTextNode('显示自动点赞控制（需在直播页手动开启）'));fields.append(likeLabel);
+    const likeModeRow=el('label','点赞模式','rule-text'), likeMode=el('select');
+    for(const [value,label] of [['continuous','连续点赞'],['clock','定时分批点赞']]){const option=el('option',label);option.value=value;likeMode.append(option);}likeMode.value=likes.mode;likeInputs.mode=likeMode;likeModeRow.append(likeMode);fields.append(likeModeRow);
+    for(const [key,label,value] of [['interval_ms','点赞间隔（毫秒）',likes.interval_ms],['every_minutes','每隔多少分钟一批',likes.every_minutes],['batch_count','每批点赞次数',likes.batch_count]]){
+      const row=el('label',label,'rule-text'), input=el('input');input.type='number';input.min='1';input.value=String(value);likeInputs[key]=input;row.append(input);fields.append(row);
+    }
+    const missedRow=el('label','错过定时时段时','rule-text'), missed=el('select');for(const [value,label] of [['skip','跳过'],['catch_up_once','补做一批']]){const option=el('option',label);option.value=value;missed.append(option);}missed.value=likes.missed;likeInputs.missed=missed;missedRow.append(missed);fields.append(missedRow);
+    error.textContent='';
+  }
+  select.onchange=renderFields; renderFields();
+  const buttons=el('div',undefined,'rule-buttons'), cancel=el('button','取消'), save=el('button','保存并生效','on');
+  cancel.type=save.type='button'; cancel.onclick=()=>dialog.close();
+  save.onclick=async()=>{save.disabled=true;error.textContent='';try{
+    const rules={};for(const [key,input] of Object.entries(inputs))rules[key]=input.type==='checkbox'?input.checked:input.value;
+    rules.timed_messages={enabled:timedInputs.enabled.checked,interval_seconds:Number(timedInputs.interval_seconds.value),min_comments:Number(timedInputs.min_comments.value),count_scope:timedInputs.count_scope.value,messages:timedInputs.messages.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean)};
+    rules.keyword_replies={enabled:keywordInputs.enabled.checked,cooldown_seconds:Number(keywordInputs.cooldown_seconds.value),rules:keywordRows.map(row=>({keywords:row.words.value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),reply:row.reply.value,match_mode:row.mode.value}))};
+    rules.likes={enabled:likeInputs.enabled.checked,mode:likeInputs.mode.value,interval_ms:Number(likeInputs.interval_ms.value),every_minutes:Number(likeInputs.every_minutes.value),batch_count:Number(likeInputs.batch_count.value),missed:likeInputs.missed.value,target_selector:data.rooms[Number(select.value)||0].likes.target_selector};
+    await api('room-rules',{id:room.id,room_id:data.rooms[Number(select.value)||0].room_id,revision:data.revision,rules}); dialog.close();
+  }catch(e){error.textContent=e.message;}finally{save.disabled=false;}};
+  buttons.append(cancel,save); dialog.append(fields,error,buttons); dialog.addEventListener('close',()=>dialog.remove()); document.body.append(dialog);dialog.showModal();
+}
+function drawHeader(panel) {
+  const r = state.rooms.find(r => r.id === panel.id), c = r.control || {}, speech = c.speech || {};
+  const signature = JSON.stringify([panel.index, state.rooms.map(room => [room.id, room.anchor_name, room.label, room.control?.connected_pages]), c]);
+  if (panel.headerSignature === signature || (panel.headerIndex === panel.index && panel.head.querySelector('select') === document.activeElement)) return;
+  panel.headerSignature = signature; panel.headerIndex = panel.index;
+  panel.head.replaceChildren();
+  const heading = el('div', undefined, 'room-heading'), identity = el('div', undefined, 'room-identity');
+  const selector = el('select', undefined, 'room-select'); selector.setAttribute('aria-label', '选择直播间');
+  for (const room of state.rooms) {
+    const name = roomName(room);
+    const duplicates = state.rooms.filter(other => roomName(other)===name).length > 1;
+    const suffix = duplicates ? ' · '+(room.platform==='douyin'?'抖音':'视频号')+' '+(state.rooms.indexOf(room)+1) : '';
+    const option = el('option', name + suffix + (room.control?.connected_pages ? '' : ' · 未连接'));
+    option.value = room.id; selector.append(option);
+  }
+  selector.value = panel.id; selector.onchange = () => switchRoom(panel.index, selector.value);
+  identity.append(el('span', String(panel.index + 1).padStart(2, '0'), 'slot-number'), selector);
+  heading.append(identity, el('span', r.platform === 'douyin' ? '抖音' : '视频号', 'platform-tag'));
+  const status = el('div', (c.connected_pages ? '● 已连接' : '○ 未连接') + ' · 语音：' + (c.speech_pending ? '等待直播页开启' : speechNames[speech.state] || '未开启'), 'muted');
+  if (speech.error) status.append(el('span', ' · ' + speech.error, 'state-error'));
+  if (c.speech_feedback) status.append(el('span', ' · ' + c.speech_feedback, 'state-warning'));
+  if (c.settings_error) status.append(el('span', ' · ' + c.settings_error, 'state-warning'));
+  if (c.blocked) status.append(el('span', ' · 发送未确认，后续发送已暂停', 'state-warning'));
+  if (c.recording_result?.message) status.append(el('span', ' · ' + c.recording_result.message));
+  if (c.manual_message?.state) { const names={queued:'等待直播页输入框就绪',issued:'正在交给直播页',submitted:'已提交到直播页',unknown:'发送结果未确认，请检查直播页',rejected:'未能发送',expired:'等待超时未发送',cancelled:'发送已取消'};status.append(el('span',' · '+(names[c.manual_message.state]||''))); }
+  const actions = el('div', undefined, 'actions');
+  if (c.client_outdated && state.userscript_install_url) {
+    const update = el('a', '更新抖音脚本（修复公屏采集）'); update.href = state.userscript_install_url; update.target = '_blank'; update.rel = 'noreferrer';
+    status.append(el('span', ' · 脚本版本过旧，请更新后刷新直播页 ', 'state-warning'), update);
+  }
+  actions.append(action(c.enabled ? '关闭场控' : '开启场控', () => api('moderation', {id:r.id, enabled:!c.enabled}), false, c.enabled));
+  actions.append(action('直播间设置', () => openRules(r), !c.connected_pages));
+  if (c.speech_available) actions.append(action(c.speech_pending ? '取消开启' : speech.enabled ? '关闭语音' : '开启语音', () => api('speech', {id:r.id, enabled:!speech.enabled && !c.speech_pending}), !c.connected_pages, speech.enabled));
+  actions.append(action('录制直播', () => api('record', {id:r.id}), !c.recording || !c.connected_pages));
+  if (r.platform === 'douyin') { const link = el('a', '打开直播页'); link.href = r.url; link.target = '_blank'; link.rel = 'noreferrer'; actions.append(link); }
+  panel.head.append(heading, status, actions);
+}
+function filtered(v) {
+  const query = v.query.trim().toLocaleLowerCase(), from = v.from ? new Date(v.from).getTime() : -Infinity, to = v.to ? new Date(v.to).getTime() : Infinity;
+  return v.entries.filter(e => (e.kind === 'note' || (e.kind === 'speech' ? v.speech : v.chat)) && displayTime(e) >= from && displayTime(e) <= to &&
+    (!query || (e.text + ' ' + e.nickname).toLocaleLowerCase().includes(query))).sort((a, b) => displayTime(a) - displayTime(b));
+}
+function pause(panel) {
+  const v = view(panel.id);
+  if (v.following) { v.following = false; v.anchorIds = new Set(v.entries.map(e => e.id)); }
+  updateFollow(panel);
+}
+function updateFollow(panel) {
+  const v = view(panel.id);
+  panel.follow.textContent = v.following ? '● 跟随实时' : '回看中';
+  panel.back.hidden = v.following; panel.footer.hidden = false; panel.back.textContent = '回到实时';
+}
+function related(e, selected) {
+  return selected && Math.floor(e.at_ms / 1000) <= Math.floor(selected.end_ms / 1000) && Math.floor(e.end_ms / 1000) >= Math.floor(selected.at_ms / 1000);
+}
+function entryNode(e, panel) {
+  const v = view(panel.id), selected = v.entries.find(x => x.id === v.selected);
+  if (e.kind === 'note') { const note = el('div', e.text, 'note'); note.dataset.id = e.id; return note; }
+  const node = el(e.kind === 'chat' ? 'div' : 'button', undefined, 'entry ' + e.kind + (e.id === v.selected ? ' selected' : related(e, selected) ? ' related' : ''));
+  const content = e.kind === 'chat' ? el('button', undefined, 'message-content') : node;
+  node.dataset.id = e.id; content.setAttribute('aria-pressed', String(e.id === v.selected));
+  if (e.kind === 'chat') { node.append(content); if(Number.isSafeInteger(e.fan_level)&&e.fan_level>0&&e.fan_level<=100000)content.append(fanBadge(e.fan_level)); content.append(el('strong', e.nickname || '观众')); content.title = e.time_basis === 'message' ? '消息时间' : '接收时间'; }
+  else if (e.kind === 'speech') {
+    const label = el('strong', '主播', 'speaker-label');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('class', 'speech-icon'); icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('fill', 'none'); icon.setAttribute('stroke', '#73d0ff');
+    icon.setAttribute('stroke-width', '1.8'); icon.setAttribute('stroke-linecap', 'round');
+    icon.setAttribute('stroke-linejoin', 'round'); icon.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M6 10v4M9 8v8M12 6v12M15 9v6M18 10.5v3');
+    icon.append(path); label.append(icon); node.append(label);
+  }
+  content.append(document.createTextNode(e.text));
+  if (e.kind === 'chat') { updateRating(node, e); updateReply(node, e, panel); }
+  node.onclick = () => { const top = panel.list.scrollTop; pause(panel); v.selected = v.selected === e.id ? null : e.id; render(panel, top); };
+  return node;
+}
+async function requestReply(entryId, panel) {
+  const v = view(panel.id), entry = v.entries.find(e => e.id === entryId);
+  if (!entry) return;
+  if (entry.reply?.state === 'pending' || entry.reply?.state === 'ready') return;
+  v.replyErrors ??= new Map(); v.replyErrors.delete(entryId);
+  entry.reply = {state:'pending',suggestions:[],has_speech:false};
+  updateVisibleRatings(panel);
+  try {
+    const result = await api('reply-suggestions', {id:panel.id,entry_id:entryId});
+    const current = v.entries.find(e => e.id === entryId); if (current) current.reply = result.reply;
+  } catch (error) {
+    v.replyErrors.set(entryId, error.message);
+    const current = v.entries.find(e => e.id === entryId); if (current) current.reply = {state:'error',error:error.message,suggestions:[]};
+  }
+  if (panels.get(panel.id) === panel) updateVisibleRatings(panel);
+}
+function updateReply(node, entry, panel) {
+  const v = view(panel.id); v.replyOpen ??= new Set();
+  let trigger = node.querySelector('.reply-trigger');
+  if (!trigger) {
+    trigger = el('button', undefined, 'reply-trigger reply-ai');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    for (const [key,value] of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'1.6','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'})) svg.setAttribute(key,value);
+    const outline = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    for (const [key,value] of Object.entries({x:'3',y:'3',width:'18',height:'18',rx:'5'})) outline.setAttribute(key,value);
+    const letters = document.createElementNS('http://www.w3.org/2000/svg','path'); letters.setAttribute('d','M7 16l3-8 3 8M8.1 13h3.8M16 8v8');
+    svg.append(outline,letters); trigger.append(svg); node.append(trigger);
+    trigger.onclick = event => {
+      event.stopPropagation(); pause(panel);
+      if (v.replyOpen.has(entry.id)) v.replyOpen.delete(entry.id);
+      else { v.replyOpen.add(entry.id); void requestReply(entry.id, panel); }
+      updateVisibleRatings(panel);
+    };
+  }
+  const open = v.replyOpen.has(entry.id); trigger.title = open ? '收起 AI 回复建议' : 'AI 回复建议'; trigger.setAttribute('aria-label',trigger.title); trigger.setAttribute('aria-expanded', String(open));
+  let box = node.querySelector('.reply-box');
+  if (!open) { box?.remove(); delete node.dataset.replySignature; return; }
+  const advice = v.replyErrors?.has(entry.id) ? {state:'error',error:v.replyErrors.get(entry.id)} : entry.reply;
+  const signature = JSON.stringify(advice || null);
+  if (box && node.dataset.replySignature === signature) return;
+  if (!box) { box = el('div', undefined, 'reply-box'); box.setAttribute('aria-live','polite'); box.onclick = e => e.stopPropagation(); node.append(box); }
+  box.replaceChildren(); node.dataset.replySignature = signature;
+  if (!advice || advice.state === 'pending') { box.append(el('span','正在针对本条留言挑选建议…','muted')); return; }
+  if (advice.state === 'error') {
+    box.append(el('span', advice.error || '建议暂时不可用，请重试。','state-error'));
+    const retry = el('button','重试','reply-trigger'); retry.onclick = () => { void requestReply(entry.id,panel); }; box.append(retry); return;
+  }
+  box.append(el('div','针对本条留言 · 上下文仅供参考','reply-context'));
+  for (const suggestion of advice.suggestions || []) {
+    const row = el('div',undefined,'reply-option'), copy = el('button','复制','reply-copy');
+    row.append(el('b',suggestion.direction),el('p',suggestion.text),copy);
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(suggestion.text); copy.textContent='已复制'; } catch (_) { copy.textContent='请手动复制'; } };
+    box.append(row);
+  }
+}
+function updateRating(node, entry) {
+  let badge = node.querySelector('.attention-score');
+  if (!entry.rating) { badge?.remove(); return; }
+  if (!badge) { badge = el('span', undefined, 'attention-score'); node.insertBefore(badge,node.querySelector('.reply-trigger')); }
+  const rating = entry.rating, scored = rating.state === 'scored' && Number.isFinite(rating.score);
+  badge.textContent = scored ? rating.score + '分' : ({pending:'评分中',busy:'待重试',error:'评分异常'}[rating.state] || '未评分');
+  badge.className = 'attention-score' + (scored && rating.score >= 75 ? ' high' : scored ? '' : rating.state === 'error' ? ' error' : rating.state === 'busy' ? ' warning' : ' muted');
+  badge.title = scored ? '关注分 ' + rating.score + '/100 · 越高越值得主播关注（不是准确率）' : '本地 StartLux · ' + badge.textContent;
+  badge.setAttribute('aria-label', badge.title);
+}
+function updateVisibleRatings(panel) {
+  const entries = new Map(view(panel.id).entries.map(e => [e.id, e]));
+  for (const node of panel.list.querySelectorAll('.entry.chat')) {
+    const entry = entries.get(node.dataset.id); if (entry) { updateRating(node, entry); updateReply(node, entry, panel); }
+  }
+}
+function trimHistory(v) {
+  const cutoff = Date.now() - RETENTION_MS;
+  v.entries = v.entries.filter(entry => displayTime(entry) >= cutoff);
+  const ids = new Set(v.entries.map(entry => entry.id));
+  v.anchorIds = new Set([...v.anchorIds].filter(id => ids.has(id)));
+  if (v.replyOpen) v.replyOpen = new Set([...v.replyOpen].filter(id => ids.has(id)));
+  if (v.replyErrors) for (const id of v.replyErrors.keys()) if (!ids.has(id)) v.replyErrors.delete(id);
+  if (v.selected && !ids.has(v.selected)) v.selected = null;
+  const seconds = new Set(v.entries.map(entry => Math.floor(displayTime(entry) / 1000)));
+  v.expanded = new Set([...v.expanded].filter(second => seconds.has(second)));
+}
+function expireDisplayed(panel) {
+  const v = view(panel.id), ids = new Set(v.entries.map(entry => entry.id));
+  const list = panel.list, height = list.scrollHeight, top = list.scrollTop;
+  for (const node of list.querySelectorAll('[data-id]')) if (!ids.has(node.dataset.id)) node.remove();
+  for (const row of list.querySelectorAll('.moment')) {
+    if (!row.querySelector('[data-id]')) { row.remove(); continue; }
+    for (const details of row.querySelectorAll('details')) {
+      const count = details.querySelectorAll('[data-id]').length;
+      if (!count) details.remove();
+      else details.querySelector('summary').textContent = '展开另外 ' + count + ' 条留言';
+    }
+  }
+  if (!v.selected) for (const node of list.querySelectorAll('.selected,.related')) node.classList.remove('selected', 'related');
+  if (!list.children.length) list.append(el('div', v.entries.length ? '回看内容已过期，点击“回到实时”查看新内容。' : '最近 30 分钟暂无内容', 'empty'));
+  list.scrollTop = Math.max(0, top - Math.max(0, height - list.scrollHeight));
+  v.scroll = list.scrollTop;
+}
+function render(panel, scroll) {
+  const v = view(panel.id); trimHistory(v);
+  const list = panel.list, top = scroll ?? v.scroll;
+  list.replaceChildren();
+  const entries = filtered(v), groups = new Map();
+  for (const entry of entries) {
+    const second = Math.floor(displayTime(entry) / 1000);
+    if (!groups.has(second)) groups.set(second, []);
+    groups.get(second).push(entry);
+  }
+  let lastDay = '';
+  for (const [second, items] of groups) {
+    const row = el('div', undefined, 'moment'); row.dataset.second = String(second);
+    const time = el('time', clock(second * 1000)), day = new Date(second * 1000).toLocaleDateString('zh-CN');
+    if (day !== lastDay) { time.prepend(el('small', day)); lastDay = day; }
+    const events = el('div', undefined, 'events');
+    // Keep speech and comments in one chronological stream; only all-comment groups fold.
+    const fold = items.length > 3 && items.every(e => e.kind === 'chat');
+    for (const e of fold ? items.slice(0, 3) : items) events.append(entryNode(e, panel));
+    if (fold) {
+      const more = el('details'); more.open = v.expanded.has(second);
+      more.addEventListener('toggle', () => { if (more.open) v.expanded.add(second); else v.expanded.delete(second); });
+      more.append(el('summary', '展开另外 ' + (items.length - 3) + ' 条留言'));
+      for (const e of items.slice(3)) more.append(entryNode(e, panel));
+      events.append(more);
+    }
+    row.append(time, events); list.append(row);
+  }
+  if (!entries.length) {
+    const empty = el('div', undefined, 'empty');
+    empty.append(el('strong', v.query || v.from || v.to ? '没有匹配的内容' : '等待直播内容'), el('span', v.query || v.from || v.to ? '试试其他关键词或时间范围。' : '播放直播并开启语音后，文字会按时间显示在这里。'));
+    list.append(empty);
+  }
+  updateFollow(panel); list.scrollTop = v.following ? list.scrollHeight : top; v.scroll = list.scrollTop;
+}
+async function loadTimeline(id) {
+  const v = view(id), requestVersion = ++v.requestVersion, data = await api('timeline', {id});
+  if (requestVersion !== v.requestVersion) return;
+  if (v.run && v.run !== data.run_id) { v.following = true; v.selected = null; v.signature = ''; }
+  v.run = data.run_id;
+  v.entries = data.entries; trimHistory(v);
+  const signature = v.entries.map(e => e.id).join('|');
+  const panel = panels.get(id);
+  if (signature !== v.signature) {
+    v.signature = signature;
+    if (panel) { if (v.following) render(panel); else { expireDisplayed(panel); updateFollow(panel); } }
+  }
+  if (panel) updateVisibleRatings(panel);
+  if (panel) void generateDeepSeek(panel);
+}
+async function generateDeepSeek(panel) {
+  const v = view(panel.id), now = Date.now();
+  if (!v.deepseekEnabled || v.deepseekPending || now < (v.deepseekNext || 0)) return;
+  const entries = v.entries.filter(e => ['speech','chat'].includes(e.kind) && (panel.source.value === 'both' || e.kind === panel.source.value) && displayTime(e) <= now && now - displayTime(e) <= suggestionMaxAge(e) && e.id !== v.deepseekLastTarget).slice(-6).map(e => ({id:e.id,kind:e.kind,text:[...e.text].slice(0,100).join('')}));
+  if (!entries.length) return;
+  const seconds = Math.max(10, Math.min(3600, Number(panel.interval.value) || 60));
+  v.deepseekNext = now + seconds * 1000; v.deepseekPending = true; panel.suggestion.textContent = '正在生成建议…';
+  try {
+    const result = await api('deepseek-reply', {id:panel.id,entries});
+    if (!v.deepseekEnabled || panels.get(panel.id) !== panel) return;
+    const target = entries.find(e => e.id === result.target_id);
+    const original = v.entries.find(e => e.id === result.target_id);
+    if (result.skipped || !target || !original || Date.now() - displayTime(original) > suggestionMaxAge(original)) { panel.suggestion.textContent = '没有合适的近期建议'; return; }
+    v.deepseekLastTarget = target.id;
+    panel.suggestion.replaceChildren(document.createTextNode((target.kind === 'speech' ? '主播' : '公屏') + '：' + target.text + ' → ' + result.reply + ' '));
+    const use = el('button','采用'); use.onclick = () => { if (Date.now() - displayTime(original) > suggestionMaxAge(original)) { panel.suggestion.textContent = '建议已过期'; return; } panel.compose.value = result.reply; v.compose = result.reply; panel.suggestion.textContent = '已填入输入框，请确认后发送'; };
+    panel.suggestion.append(use);
+  } catch (error) { panel.suggestion.textContent = error.message; }
+  finally { v.deepseekPending = false; }
+}
+async function loadVisibleTimelines() {
+  const results = await Promise.allSettled(visibleRooms().map(loadTimeline));
+  // A room can close after the room list was fetched but before its timeline.
+  // The next refresh removes it; other failures must still be shown.
+  const failed = results.find(result => result.status === 'rejected' && result.reason?.message !== 'unknown room');
+  if (failed) $('notice').textContent = failed.reason.message;
+}
+function drawDownloads() {
+  const list = $('downloads'); list.replaceChildren();
+  if (!state.downloads.length) list.append(el('p', '暂无录制任务。进入并播放直播后，点击对应直播间的“录制直播”。', 'muted'));
+  for (const task of state.downloads) {
+    const row = el('div', undefined, 'task'), names = {waiting:'等待启动', downloading:'录制中', paused:'已暂停', finished:'已完成', failed:'失败'};
+    row.append(el('div', task.name + ' · ' + (names[task.status] || task.status) + (task.error ? ' · ' + task.error : ''), 'task-title'));
+    const next = ['waiting', 'downloading'].includes(task.status) ? 'pause' : 'start';
+    row.append(action(next === 'pause' ? '暂停' : '继续', () => api('download', {id:task.id, action:next})), action('移除', () => api('download', {id:task.id, action:'delete'}))); list.append(row);
+  }
+}
+async function refresh() {
+  try {
+    state = await api('state');
+    $('userscript-setup').hidden = !state.userscript_install_url;
+    if (state.userscript_install_url) $('userscript-install').href = state.userscript_install_url;
+    if (tab === 'rooms') { reconcilePanels(); await loadVisibleTimelines(); }
+    else drawDownloads();
+    if (pendingRoomSettings) {
+      const room = state.rooms.find(item => item.id === pendingRoomSettings);
+      if (room?.control?.connected_pages) {
+        pendingRoomSettings = null;
+        try { await openRules(room); } catch (error) { $('notice').textContent = error.message; }
+      }
+    }
+  } catch (error) { $('notice').textContent = error.message; }
+}
+for (const mode of ['single', 'double']) $('layout-' + mode).onclick = () => { layoutMode = mode; reconcilePanels(); void loadVisibleTimelines(); };
+for (const name of ['rooms', 'downloads']) $('tab-' + name).onclick = () => {
+  tab = name;
+  for (const n of ['rooms', 'downloads']) { $(n + '-view').hidden = n !== name; $('tab-' + n).classList.toggle('active', n === name); }
+  if (name === 'downloads') drawDownloads();
+  else { reconcilePanels(); for (const panel of panels.values()) render(panel); void loadVisibleTimelines(); }
+};
+async function poll() { if (!busy) await refresh(); setTimeout(poll, 2000); }
+void poll();
+</script>
+</body>
+</html>

@@ -33,7 +33,7 @@ function environment(options = {}) {
   node.ownerDocument = document;
   const button={isConnected:true,ownerDocument:document,tagName:'BUTTON',textContent:'发送',getClientRects:()=>[{}],closest:()=>null,matches:()=>false,disabled:!!options.sendDisabled,click(){clicks++;sent.push(String(options.rich?leaf.textContent:node.value).replace(/[\u200b\ufeff]/g,''));if(options.clearOnSend){if(options.rich)leaf._text='';else node._value='';}if(options.delayedClear)setTimeout(()=>{if(options.rich)leaf._text='';else node._value='';},options.delayedClear);}};
   const container={querySelectorAll:s=>s.startsWith('svg.')?[]:[button]};
-  if(options.automatic)node.closest=s=>s.startsWith('div[class*="webcast-chatroom___input-container"]')?container:null;
+  if(options.automatic||options.manual)node.closest=s=>s.startsWith('div[class*="webcast-chatroom___input-container"]')?container:null;
   const command = {v:1, command:'fill_input', action_id:'action-1', connection_id:'conn', binding_id:'binding', document_id:'doc',
     page_url:'https://live.douyin.com/139244611014', remaining_ttl_ms:3000, text:'场控填入测试（不会发送）', ...options.command};
   const pollResponse = () => {
@@ -68,12 +68,18 @@ function environment(options = {}) {
     crypto:{randomUUID:()=> 'doc'}, AbortController, Event,
     setTimeout:(fn,ms)=> {if (ms === 500 || ms === 2000 && fn.name === 'tick') {const id={}; timers.set(id,fn); return id;} return setTimeout(fn,ms);},
     clearTimeout:id=>{if (!timers.delete(id)) clearTimeout(id);} });
-  vm.runInContext(`(()=>{const BOOT={room_url:'https://live.douyin.com/139244611014',prefix:'/__live_archive/moderation/v1/',ticket:'ticket',fill_preview:true,automatic_send:${!!options.automatic}};${source};window.__testExecutor=fillExecutor;})() ;`, context);
+  vm.runInContext(`(()=>{const BOOT={room_url:'https://live.douyin.com/139244611014',prefix:'/__live_archive/moderation/v1/',ticket:'ticket',fill_preview:true,manual_send:${!!options.manual},moderation_enabled:${!options.manual},automatic_send:${!!options.automatic}};${source};window.__testExecutor=fillExecutor;})() ;`, context);
   if (options.composing) listeners.get('compositionstart')();
   return {browser, node, leaf, requests, receipts, listeners, location,command,sent,written,selection:()=>restoredSelection,setClock:value=>clock=value,writes:()=>writes, clicks:()=>clicks, writtenText:()=>writtenText,
     release:()=>resolvePoll?.(), async ready(){for(let i=0;i<240&&!receipts.length;i++)await delay(5);}, async cycle() {const entry=timers.entries().next().value; assert.ok(entry); timers.delete(entry[0]); await entry[1]();},
     dispose:()=>browser.__liveArchiveModerationV1.dispose()};
 }
+
+test('manual message can submit while automatic moderation is disabled',async()=>{
+  const env=environment({manual:true,command:{command:'fill_and_submit',action_id:'manual-test',text:'手动消息'}});
+  try {await env.ready();assert.equal(env.receipts[0]?.reason,'input_submitted');assert.equal(env.clicks(),1);assert.equal(env.browser.__liveArchiveModerationV1.getStatus().moderation_enabled,false);}
+  finally {env.dispose();}
+});
 
 test('textarea fills once, duplicate commands return cached receipt without rewriting', async () => {
   const env = environment();

@@ -1,6 +1,6 @@
 [package]
 name = "live-archive-gui"
-version = "0.1.0"
+version = "0.5.14"
 edition = "2024"
 license = "MIT"
 description = "GPUI desktop shell for Live Archive"
@@ -14,3 +14,7 @@ chrono = "0.4"
 url = "2.5"
 uuid = { version = "1.18", features = ["v4"] }
 unicode-segmentation = "1.12"
+tokio = { version = "1.48", features = ["rt-multi-thread", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde_json = "1.0"
+anyhow = "1.0"

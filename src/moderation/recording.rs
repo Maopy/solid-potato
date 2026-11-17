@@ -1,7 +1,7 @@
 //! Shared recording runtime hosted by the moderation process and proxy.
 use crate::{
     capture_service::{CaptureIngestor, CapturePermit, LoopbackCaptureServer},
-    capture_sidecar::{MitmproxySidecarConfig, render_addon},
+    capture_sidecar::{MitmproxySidecarConfig, render_addon_with_ui},
     download_task_bridge::{DownloadTaskBridge, TaskSnapshot},
     model::ResolvedStream,
     model::{Platform, RecordingTask, TaskStatus},
@@ -104,6 +104,16 @@ impl RecordingRuntime {
         rooms: Vec<Url>,
         moderation_source: &str,
     ) -> Result<Self> {
+        Self::start_with_ui(config, directory, rooms, moderation_source, false).await
+    }
+
+    pub async fn start_with_ui(
+        config: RecordingConfig,
+        directory: &Path,
+        rooms: Vec<Url>,
+        moderation_source: &str,
+        unified_ui: bool,
+    ) -> Result<Self> {
         config.validate()?;
         let output = config.output_directory()?;
         std::fs::create_dir_all(directory)?;
@@ -121,15 +131,18 @@ impl RecordingRuntime {
                 .with_recording_requests(sender.clone(), rooms.clone()),
         ))
         .await?;
-        let capture = render_addon(&MitmproxySidecarConfig {
-            executable: PathBuf::new(),
-            working_directory: directory.into(),
-            listen_port: 1,
-            capture_endpoint: Url::parse(&format!("http://{}/capture", endpoint.address))?,
-            channels_ws_url: format!("ws://{}/ws/channels", channels.address),
-            downloader_ws_url: format!("ws://{task_address}/ws/v1/download_task"),
-            permit,
-        });
+        let capture = render_addon_with_ui(
+            &MitmproxySidecarConfig {
+                executable: PathBuf::new(),
+                working_directory: directory.into(),
+                listen_port: 1,
+                capture_endpoint: Url::parse(&format!("http://{}/capture", endpoint.address))?,
+                channels_ws_url: format!("ws://{}/ws/channels", channels.address),
+                downloader_ws_url: format!("ws://{task_address}/ws/v1/download_task"),
+                permit,
+            },
+            unified_ui,
+        );
         let source = compose(moderation_source, &capture, &rooms)?;
         let (stopping, stop) = watch::channel(false);
         let output_display = output.display().to_string();

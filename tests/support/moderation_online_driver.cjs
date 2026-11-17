@@ -38,12 +38,20 @@ const makeGift = (msg, qty, end = false, options = {}) => {
 const memberOrUpgrade = (msg, upgrade) => {
   const method = upgrade ? 'WebcastFansclubMessage' : 'WebcastMemberMessage';
   const metadata = pb(field(4, BigInt(ANCHOR)));
-  const common = pb(field(1, text(method)), field(2, msg), field(3, BigInt(ROOM)), ...(upgrade?[field(4, BigInt(Math.floor(Date.now()/1000)))]:[]), field(16, metadata));
+  const common = pb(field(1, text(method)), field(2, msg), field(3, BigInt(ROOM)), field(16, metadata));
   const club = pb(field(1, pb(field(2, 3), field(6, BigInt(ANCHOR)))));
   const who = pb(field(1, 9007199254740993555n), field(3, text('集成测试乙')), field(24, club));
   const body = upgrade ? pb(field(1, common), field(2, 1), field(4, who)) : pb(field(1, common), field(2, who), field(10, 1));
   const message = pb(field(1, text(method)), field(2, body), field(3, msg));
   return pb(field(7, text('pb')), field(8, pb(field(1, message), field(4, Date.now())))).buffer;
+};
+const userUpgrade = msg => {
+  const method='WebcastRoomMessage';
+  const who=pb(field(1,9007199254740993556n),field(3,text('等级测试丙')));
+  const display=pb(field(2,text('恭喜{0:user}刚刚升级至Lv.{1:string}')),field(4,pb(field(1,11),field(21,pb(field(1,who))))),field(4,pb(field(1,1),field(11,text('31')))));
+  const common=pb(field(1,text(method)),field(2,msg),field(3,BigInt(ROOM)),field(8,display),field(16,pb(field(4,BigInt(ANCHOR)))));
+  const body=pb(field(1,common),field(20,text('level_up_msg')));
+  return pb(field(7,text('pb')),field(8,pb(field(1,pb(field(1,text(method)),field(2,body),field(3,msg))),field(4,Date.now())))).buffer;
 };
 const requests = [], consolePreviews = [], consoleWarnings = [], dispatchTimes = [], fillLogs = [];
 let deliverySocket;
@@ -180,11 +188,13 @@ const context = vm.createContext({ window: browser, XMLHttpRequest:Xhr, location
   if(automatic)assert.equal(submissions,2);
   socket.dispatch(memberOrUpgrade(9007199254740993666n, false));
   socket.dispatch(memberOrUpgrade(9007199254740993667n, true));
+  socket.dispatch(userUpgrade(9007199254740993668n));
   await sleep(1200);
   const actions = browser.__liveArchiveModerationV1.getStatus().previews;
   assert.ok(actions.some(x => x.kind === 'accepted' && x.reason === 'welcome_batched'));
   assert.ok(!actions.some(x => x.kind === 'planned' && x.action.kind === 'welcome'), 'arrival waits for the 30-second batch');
   assert.ok(actions.some(x => x.kind === 'planned' && x.action.text === '恭喜集成测试乙的粉丝团升级到3级'));
+  assert.ok(actions.some(x => x.kind === 'planned' && x.action.text === '恭喜等级测试丙的用户等级升级到31级'));
   assert.ok(actions.some(x => x.kind === 'cancelled' && x.reason === 'higher_priority_interaction'));
   // Bad transport input must cancel pending work and latch the pause.
   socket.dispatch(new Uint8Array([255]).buffer);

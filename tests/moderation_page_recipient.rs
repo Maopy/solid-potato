@@ -64,6 +64,7 @@ fn unrecognized_pages_can_pair_without_thanks_and_real_targets_remain_per_page()
         assert_eq!(boot["recipient_pending"], !enabled);
         let hello = bridge
             .hello(Hello {
+                client_version: None,
                 v: 1,
                 ticket: boot["ticket"].as_str().unwrap().into(),
                 page_url: page.into(),

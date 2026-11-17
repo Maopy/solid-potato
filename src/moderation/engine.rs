@@ -15,6 +15,7 @@ pub struct RulesConfig {
     pub gift_show_quantity: bool,
     pub welcome_enabled: bool,
     pub supporter_welcome_enabled: bool,
+    pub supporter_min_fansclub_level: Option<u32>,
     pub fansclub_joined_enabled: bool,
     pub fansclub_upgrade_enabled: bool,
     pub honor_upgrade_enabled: bool,
@@ -43,6 +44,7 @@ impl Default for RulesConfig {
             gift_show_quantity: true,
             welcome_enabled: true,
             supporter_welcome_enabled: true,
+            supporter_min_fansclub_level: None,
             fansclub_joined_enabled: true,
             fansclub_upgrade_enabled: true,
             honor_upgrade_enabled: true,
@@ -225,6 +227,19 @@ impl Engine {
             action_seq: 0,
             batch_seq: 0,
         })
+    }
+
+    /// Replace validated formatting and rule settings without resetting room
+    /// state, deduplication, pending batches, or already-created actions.
+    pub fn update_rules(&mut self, config: RulesConfig) -> Result<()> {
+        let next = Self::new(config)?;
+        self.config = next.config;
+        self.gift_text = next.gift_text;
+        self.welcome = next.welcome;
+        self.supporter_welcome = next.supporter_welcome;
+        self.fansclub_joined = next.fansclub_joined;
+        self.upgrade = next.upgrade;
+        Ok(())
     }
 
     fn check_clock(&self, now: u64) -> Result<()> {
@@ -467,7 +482,10 @@ impl Engine {
             suppress(out, "unverified_input");
             return Ok(());
         }
-        let nickname = clean_text(&user.nickname, 80);
+        let nickname = clean_text(
+            self.config.gift_nicknames.get(id).map(String::as_str).unwrap_or(&user.nickname),
+            80,
+        );
         let nickname = if nickname.is_empty() {
             "朋友".to_owned()
         } else {

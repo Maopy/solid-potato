@@ -471,4 +471,10 @@ impl FillSession {
             "in_flight":self.in_flight,"filled":count("filled"),"rejected":count("rejected"),"unknown":count("unknown"),"echo_confirmed":count("echo_confirmed"),
             "manual_only":self.manual_only,"completion":if self.automatic_send {"click_attempt_not_delivery"} else {"input_filled_no_submission"}})
     }
+    pub fn action_status(&self, id: &str) -> Option<Value> {
+        self.entries.get(id).map(|entry| json!({"state":entry.state,"reason":entry.report.as_ref().map(|(_,reason)|reason),"delivery":entry.delivery.as_ref().map(|d|&d.state)}))
+    }
+    pub fn has_in_flight(&self) -> bool {
+        self.in_flight.is_some()
+    }
 }

@@ -163,6 +163,14 @@ impl LivePageState {
 }
 
 pub fn html_tags(channels_ws_url: &str, downloader_ws_url: &str) -> String {
+    html_tags_with_ui(channels_ws_url, downloader_ws_url, false)
+}
+
+pub fn html_tags_with_ui(
+    channels_ws_url: &str,
+    downloader_ws_url: &str,
+    unified_ui: bool,
+) -> String {
     let asset = |path: &str| format!("{UPSTREAM_PREFIX}{path}");
     let scripts = [
         "/public/timeless/0.32.0/timeless.umd.min.js",
@@ -201,7 +209,7 @@ pub fn html_tags(channels_ws_url: &str, downloader_ws_url: &str) -> String {
         ));
     }
     tags.push_str(&format!(
-        "<script>window.__d_config={{apiOrigin:location.origin,apiProtocol:location.protocol.replace(':',''),apiHost:location.host,assets_base_url:'/__assets',channelsWSURL:{channels_ws_url:?},downloaderWSURL:{downloader_ws_url:?}}};</script>"
+        "<script>window.__d_config={{apiOrigin:location.origin,apiProtocol:location.protocol.replace(':',''),apiHost:location.host,assets_base_url:'/__assets',channelsWSURL:{channels_ws_url:?},downloaderWSURL:{downloader_ws_url:?},unifiedUI:{unified_ui}}};</script>"
     ));
     for path in &scripts[4..] {
         tags.push_str(&format!("<script src=\"{}\"></script>", asset(path)));
@@ -221,6 +229,15 @@ pub fn live_page_tag() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unified_mode_is_declared_before_any_recording_ui_script() {
+        let tags = html_tags_with_ui("ws://127.0.0.1:2022", "ws://127.0.0.1:2023", true);
+        assert!(tags.find("unifiedUI:true").unwrap() < tags.find("/inject/eventbus.js").unwrap());
+        assert!(
+            html_tags("ws://127.0.0.1:2022", "ws://127.0.0.1:2023").contains("unifiedUI:false")
+        );
+    }
 
     #[test]
     fn exposes_stable_same_origin_resource_paths() {

@@ -13,9 +13,9 @@ const createWechatFillExecutor = context => {
     }
     return [];
   };
-  const inspect=()=>{
+  const inspect=(manual=false)=>{
     if(window.top!==window.self)return {reason:'not_top_frame'};
-    if(document.hidden)return {reason:'page_hidden'};
+    if(document.hidden&&!context.canRunHidden(manual))return {reason:'page_hidden'};
     const nodes=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(n=>
       n.isConnected&&n.ownerDocument===document&&n.getClientRects().length&&!n.closest('#live-archive-moderation-panel'));
     if(!nodes.length)return {reason:'input_not_found'};
@@ -28,9 +28,10 @@ const createWechatFillExecutor = context => {
     if(composing||String(contents(node)||'').replace(/[\u200b\ufeff]/g,'')!==''||node.querySelector?.('img,video,audio,[data-mention]'))return {node,reason:'input_busy'};
     return {node};
   };
-  const prepareInput=async(pending)=>{
-    if((!BOOT.automatic_send&&!BOOT.input_open_test)||pending<1||composing||!context.active()||!context.sameRoom()||context.paused()||document.hidden)return;
-    if(inspect().reason!=='input_not_found'||performance.now()-lastOpenAt<3000)return;
+  const prepareInput=async(pending,manual=false)=>{
+    const active=manual?context.manualActive:context.active, paused=manual?context.manualPaused:context.paused, room=manual?context.manualSameRoom:context.sameRoom;
+    if((!BOOT.automatic_send&&!BOOT.input_open_test&&!manual)||pending<1||composing||!active()||!room()||paused()||(document.hidden&&!context.canRunHidden(manual)))return;
+    if(inspect(manual).reason!=='input_not_found'||performance.now()-lastOpenAt<3000)return;
     // The observed desktop entry is a rounded, visible "聊一聊" control.
     // The sidebar heading has the same words; never click the heading.
     const nodes=Array.from(document.querySelectorAll('button,[role="button"],div,span,input,textarea'));
@@ -45,28 +46,30 @@ const createWechatFillExecutor = context => {
         rect.width>=100&&rect.height>=20&&rect.height<=100;
     });
     if(entries.length!==1){lastOpenReason=entries.length?'opener_not_unique':'opener_not_found';return;}
-    if(!context.active()||!context.sameRoom()||context.paused()||composing||inspect().reason!=='input_not_found')return;
+    if(!active()||!room()||paused()||composing||inspect(manual).reason!=='input_not_found')return;
     lastOpenAt=performance.now();
     const labels=chatSubmitCandidates(entries[0],'聊一聊');
     if(labels.length>1){lastOpenReason='opener_not_unique';return;}
     const entry=labels[0]||entries[0];
-    try{entry.click();await new Promise(resolve=>setTimeout(resolve,0));lastOpenReason=inspect().node?'input_opened':'opener_no_editor';}
+    try{entry.click();await new Promise(resolve=>setTimeout(resolve,0));lastOpenReason=inspect(manual).node?'input_opened':'opener_no_editor';}
     catch(_){lastOpenReason='opener_error';}
   };
   const execute=async(command,elapsed)=>{
     const reject=reason=>{lastReason=reason;return {outcome:'rejected',reason};};
-    if(!context.active())return reject('stopped');
-    if(!context.sameRoom())return reject('room_changed');
-    if(context.paused())return reject('observation_paused');
-    if(command.command!==(BOOT.automatic_send?'fill_and_submit':'fill_input')||typeof command.text!=='string'||!command.text.trim()||/[\u0000-\u001f\u007f-\u009f]/.test(command.text))return reject('invalid_command');
+    const manual=BOOT.manual_send===true&&command.action_id?.startsWith('manual-');
+    const active=manual?context.manualActive:context.active,paused=manual?context.manualPaused:context.paused,room=manual?context.manualSameRoom:context.sameRoom;
+    if(!active())return reject('stopped');
+    if(!room())return reject('room_changed');
+    if(paused())return reject('observation_paused');
+    if(command.command!==((BOOT.automatic_send||manual)?'fill_and_submit':'fill_input')||typeof command.text!=='string'||!command.text.trim()||/[\u0000-\u001f\u007f-\u009f]/.test(command.text))return reject('invalid_command');
     if(Array.from(command.text).length>80)return reject('text_too_long');
     if(!Number.isFinite(elapsed)||elapsed<0||!Number.isFinite(command.remaining_ttl_ms)||command.remaining_ttl_ms<=elapsed||command.remaining_ttl_ms>3000)return reject('ttl_expired');
-    const deadline=performance.now()+command.remaining_ttl_ms-elapsed,candidate=inspect();
+    const deadline=performance.now()+command.remaining_ttl_ms-elapsed,candidate=inspect(manual);
     if(candidate.reason)return reject(candidate.reason);
     const node=candidate.node;
-    if(!context.active()||!context.sameRoom())return reject('stopped');
-    if(context.paused())return reject('observation_paused');
-    if(inspect().node!==node)return reject('input_changed');
+    if(!active()||!room())return reject('stopped');
+    if(paused())return reject('observation_paused');
+    if(inspect(manual).node!==node)return reject('input_changed');
     if(performance.now()>=deadline)return reject('ttl_expired');
     try{
       if(node.tagName==='TEXTAREA'){
@@ -78,17 +81,19 @@ const createWechatFillExecutor = context => {
       if(!node.isConnected||String(contents(node)||'').replace(/[\u200b\ufeff]/g,'')!==command.text.replace(/[\u200b\ufeff]/g,''))return reject('input_changed');
       const targets=findSendButtons(node);
       lastSendButtonCount=targets.length;lastSendTarget=targets.length===1?String(targets[0].tagName||'').toLowerCase():null;
-      if(BOOT.automatic_send){
-        const result=await submitFilledInput({...context,inputSafe:()=>!composing},node,command.text,deadline,contents,()=>findSendButtons(node));
+      if(BOOT.automatic_send||manual){
+        const result=await submitFilledInput({...context,active,paused,sameRoom:room,manual,inputSafe:()=>!composing},node,command.text,deadline,contents,()=>findSendButtons(node));
         lastReason=result.reason;return result;
       }
       lastReason='input_filled';return {outcome:'filled',reason:'input_filled'};
     }catch(_){return reject('input_error');}
   };
-  return {execute,prepareInput,getStatus:()=>{const state=context.paused()?{reason:'observation_paused'}:inspect();if(state.node){const targets=findSendButtons(state.node);lastSendButtonCount=targets.length;lastSendTarget=targets.length===1?String(targets[0].tagName||'').toLowerCase():null;}return {mode:BOOT.automatic_send?'fill_and_send':'fill_only',send_chat:BOOT.automatic_send===true,input_ready:!state.reason,input_reason:state.reason||null,last_reason:lastReason,last_send_button_count:lastSendButtonCount,last_send_target:lastSendTarget,last_open_reason:lastOpenReason,send_button_count:state.node?findSendButtons(state.node).length:0};},
+  return {execute,prepareInput,getStatus:(manual=false)=>{const state=(manual?context.manualPaused():context.paused())?{reason:'observation_paused'}:inspect(manual);if(state.node){const targets=findSendButtons(state.node);lastSendButtonCount=targets.length;lastSendTarget=targets.length===1?String(targets[0].tagName||'').toLowerCase():null;}return {mode:BOOT.automatic_send?'fill_and_send':'fill_only',send_chat:BOOT.automatic_send===true,input_ready:!state.reason,input_reason:state.reason||null,last_reason:lastReason,last_send_button_count:lastSendButtonCount,last_send_target:lastSendTarget,last_open_reason:lastOpenReason,send_button_count:state.node?findSendButtons(state.node).length:0};},
     dispose:()=>{document.removeEventListener('compositionstart',start,true);document.removeEventListener('compositionend',end,true);}};
 };
-if(BOOT.fill_preview){
-  fillExecutor=createWechatFillExecutor({active:()=>!stopped&&!draining&&(typeof moderationEnabled==="undefined"||moderationEnabled),sameRoom,paused:()=>!wxCollecting});
+if(BOOT.fill_preview||BOOT.manual_send){
+  // Background actions are only safe with a freshly verified room identity.
+  const canRunHidden=(manual=false)=> (BOOT.automatic_send===true||(BOOT.manual_send===true&&manual)) && typeof BOOT.room_identity==='string' && !!BOOT.room_identity && wxReadLiveIdentity()===BOOT.room_identity;
+  fillExecutor=createWechatFillExecutor({active:()=>!stopped&&!draining&&(typeof moderationEnabled==="undefined"||moderationEnabled),manualActive:()=>!stopped&&!draining,manualPaused:()=>false,manualSameRoom:()=>sameRoom()&&typeof BOOT.room_identity==='string'&&!!BOOT.room_identity&&wxReadLiveIdentity()===BOOT.room_identity,sameRoom:()=>sameRoom()&&(!document.hidden||canRunHidden()),canRunHidden,allowHidden:true,paused:()=>!wxCollecting});
   sdk.onDispose(()=>fillExecutor.dispose());
 }

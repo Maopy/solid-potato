@@ -65,6 +65,7 @@ pub struct LoadedTask {
     pub label: String,
     pub account_id: String,
     pub config: ModerationConfig,
+    pub config_path: PathBuf,
 }
 pub struct LoadedControl {
     pub config: ControlConfig,
@@ -181,6 +182,7 @@ impl LoadedControl {
                     t.label.clone()
                 },
                 account_id: t.account_id.clone(),
+                config_path: p.canonicalize()?,
                 config,
             });
         }
@@ -224,6 +226,12 @@ pub struct Controller {
 }
 impl Controller {
     pub async fn bind(loaded: &LoadedControl) -> Result<Self> {
+        // Migrate copies left by previous versions before starting services.
+        // LoadedControl::load remains read-only for configuration checks.
+        for task in &loaded.tasks {
+            super::room_profiles::migrate_legacy_overlays(&task.config_path)
+                .with_context(|| format!("migrate room settings for {}", task.id))?;
+        }
         let mut budgets = BTreeMap::new();
         for a in &loaded.config.accounts {
             budgets.insert(
@@ -241,14 +249,33 @@ impl Controller {
             }),
         };
         for task in &loaded.tasks {
-            if task.config.room.platform == "douyin" {
+            let current = match ModerationConfig::load(&task.config_path) {
+                Ok(config) => config,
+                Err(error) => {
+                    let _ = result.stop().await;
+                    return Err(error);
+                }
+            };
+            if current.room.platform != task.config.room.platform
+                || current.room.url != task.config.room.url
+                || current.mode != task.config.mode
+                || current.sending.automatic != task.config.sending.automatic
+            {
+                let _ = result.stop().await;
+                bail!(
+                    "task {} connection settings changed during startup; retry",
+                    task.id
+                );
+            }
+            if current.room.platform == "douyin" {
                 if let Some(hub) = &result.userscript {
                     hub.add_template(
                         &task.id,
                         &task.account_id,
-                        task.config.probe_options(),
+                        current.probe_options(),
                         budgets[&task.account_id].clone(),
                     )?;
+                    hub.set_template_config_path(task.config_path.clone())?;
                     continue;
                 }
             }
@@ -256,10 +283,11 @@ impl Controller {
                 let directory = loaded.config.directory.join("tasks").join(&task.id);
                 std::fs::create_dir_all(&directory)?;
                 let mut bridge = ProbeBridge::new(
-                    ProbeScope::from_room_url(task.config.room.url.clone())?,
+                    ProbeScope::from_room_url(current.room.url.clone())?,
                     ProbeJournal::open(&directory.join("moderation-probe.sqlite3"))?,
                 );
-                let options = task.config.probe_options();
+                bridge.set_config_path(task.config_path.clone());
+                let options = current.probe_options();
                 bridge.configure_room_profiles(options.room_profiles.clone());
                 bridge.configure_task(&task.id, budgets[&task.account_id].clone())?;
                 bridge.configure_ui(loaded.config.recording.enabled, loaded.config.dashboard);
@@ -387,18 +415,45 @@ impl Controller {
 }
 
 pub async fn serve(path: &Path) -> Result<()> {
+    serve_inner(path, None::<fn(String)>, std::future::pending()).await
+}
+
+/// Run the controller inside a desktop application. The callback receives the
+/// authenticated dashboard URL once it is ready; resolving `shutdown` runs
+/// the same cleanup used by the command-line controller.
+pub async fn serve_in_process<F, S>(path: &Path, ready: F, shutdown: S) -> Result<()>
+where
+    F: FnOnce(String),
+    S: std::future::Future<Output = ()>,
+{
+    serve_inner(path, Some(ready), shutdown).await
+}
+
+async fn serve_inner<F, S>(path: &Path, ready: Option<F>, shutdown: S) -> Result<()>
+where
+    F: FnOnce(String),
+    S: std::future::Future<Output = ()>,
+{
     let loaded = LoadedControl::load(path)?;
-    let mut interrupt = super::shutdown::ShutdownSignals::new()?;
+    if ready.is_some() && !loaded.config.dashboard {
+        bail!("桌面中控需要在配置中启用 dashboard");
+    }
+    let mut interrupt = if ready.is_none() {
+        Some(super::shutdown::ShutdownSignals::new()?)
+    } else {
+        None
+    };
     let mut controller = Controller::bind(&loaded).await?;
     let scopes: Vec<_> = controller.tasks.values().map(|t| t.scope.clone()).collect();
     let source = controller.addon()?;
     let c = &loaded.config;
     let mut recording_runtime = if c.recording.enabled {
-        match super::recording::RecordingRuntime::start(
+        match super::recording::RecordingRuntime::start_with_ui(
             c.recording.clone(),
             &c.directory,
             scopes.iter().map(|s| s.room_url.clone()).collect(),
             &source,
+            true,
         )
         .await
         {
@@ -500,20 +555,24 @@ pub async fn serve(path: &Path) -> Result<()> {
             }
         };
         println!("统一控制页：{}", dashboard.url);
-        #[cfg(target_os = "macos")]
-        let _ = std::process::Command::new("open")
-            .arg(&dashboard.url)
-            .spawn();
-        #[cfg(target_os = "windows")]
-        let _ = std::process::Command::new("rundll32.exe")
-            .arg("url.dll,FileProtocolHandler")
-            .arg(&dashboard.url)
-            .spawn();
+        if let Some(ready) = ready {
+            ready(dashboard.url.clone());
+        } else {
+            #[cfg(target_os = "macos")]
+            let _ = std::process::Command::new("open")
+                .arg(&dashboard.url)
+                .spawn();
+            #[cfg(target_os = "windows")]
+            let _ = std::process::Command::new("rundll32.exe")
+                .arg("url.dll,FileProtocolHandler")
+                .arg(&dashboard.url)
+                .spawn();
+        }
         Some(dashboard)
     } else {
         None
     };
-    let result = tokio::select! {_ = interrupt.recv()=>Ok(()),r=async {match &mut sidecar {Some(s)=>s.wait_for_exit().await,None=>std::future::pending().await}}=>r,_=tokio::time::sleep(Duration::from_secs(c.duration_seconds)),if c.duration_seconds!=0=>Ok(())};
+    let result = tokio::select! {_ = shutdown=>Ok(()),_ = async { match &mut interrupt { Some(signals) => { signals.recv().await; }, None => std::future::pending().await } }=>Ok(()),r=async {match &mut sidecar {Some(s)=>s.wait_for_exit().await,None=>std::future::pending().await}}=>r,_=tokio::time::sleep(Duration::from_secs(c.duration_seconds)),if c.duration_seconds!=0=>Ok(())};
     // Release network routing before waiting for recording finalization.
     let restored = proxy.as_ref().map_or(Ok(()), |p| p.stop());
     if let Some(dashboard) = &mut dashboard {

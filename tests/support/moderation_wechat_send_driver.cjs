@@ -64,6 +64,7 @@ const nativeOff=function(name,callback) {assert.equal(this,nativeBridge);if(nati
 const nativeBridge={invoke:nativeInvoke,on:nativeOn,off:nativeOff,_handleMessageFromWeixin:nativeDispatch};
 Object.defineProperty(nativeBridge,'call',{value:nativeInvoke,writable:false});
 browser.WeixinJSBridge=nativeBridge;
+if(scenario==='background')browser.WXU={check_live_existing:()=>[null,{contact:{username:'fixture-recipient'}}]};
 browser.self=browser; browser.top=browser;
 const location={origin,pathname:'/web/pages/live',href:room+'?sensitive=query'};
 class Element {
@@ -120,7 +121,7 @@ if(scenario==='nested'||scenario==='nested_custom'){
 }
 
 browser.HTMLTextAreaElement=Textarea;
-document.hidden=false;document.activeElement=editor;document.querySelectorAll=()=>[editor];
+document.hidden=scenario==='background';document.activeElement=editor;document.querySelectorAll=()=>[editor];
 if((scenario==='collapsed'||scenario==='open_only'||scenario==='timed')){
   editorOpen=false;
   const makeEntry=(heading)=>({tagName:'DIV',textContent:'聊一聊',isConnected:true,ownerDocument:document,children:heading?[]:[{},{}],

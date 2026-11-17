@@ -1,10 +1,11 @@
 {
-  "provider": "whisper_cpp",
-  "executable": "whisper-cli",
-  "ffmpeg": "ffmpeg",
-  "model": "dist/.live-archive-models/ggml-small.bin",
-  "model_sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+  "provider": "funasr_paraformer",
+  "executable": "dist/.live-archive-tools/python312/python.exe",
+  "ffmpeg": "C:\\Users\\crazy\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-9.0.2-full_build-shared\\bin\\ffmpeg.EXE",
+  "model": "dist/.live-archive-models/FunASR-seaco-paraformer",
+  "model_sha256": "3d491689244ec5dfbf9170ef3827c358aa10f1f20e42a7c59e15e688647946d1",
   "language": "zh",
   "threads": 4,
-  "use_gpu": true
+  "use_gpu": true,
+  "runner": "tools/funasr_asr_worker.py"
 }

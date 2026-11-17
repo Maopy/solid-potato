@@ -12,7 +12,7 @@ const metadataReaders = new Set();
 const fetchHook = function (...args) {
   const result = Reflect.apply(originalFetch, this, args);
   if (relevant(args[0])) result.then(response => { sdk.captureResponse?.("fetch",response); trackNetwork("fetch", (response.headers.get("content-type") || "unknown").split(";")[0]); }).catch(() => {});
-  if (BOOT.rules_preview && relevant(args[0]) && String(args[0]?.url || args[0]).includes("/webcast/room/web/enter")) {
+  if ((BOOT.rules_preview || BOOT.unified_ui) && relevant(args[0]) && String(args[0]?.url || args[0]).includes("/webcast/room/web/enter")) {
     result.then(async response => {
       if (metadataReaders.size >= 4 || sdk.getStatus().stopped) return;
       const copy = response.clone(), reader = copy.body?.getReader();
@@ -48,7 +48,7 @@ const openHook = function (...args) {
     const listener = () => {
       try { if (xhr.responseType === "json") sdk.captureRaw?.("xhr","response",xhr.response);
         else if (!xhr.responseType || xhr.responseType === "text") sdk.captureRaw?.("xhr","response",xhr.responseText);
-        if (BOOT.rules_preview && String(args[1]).includes("/webcast/room/web/enter")) {
+        if ((BOOT.rules_preview || BOOT.unified_ui) && String(args[1]).includes("/webcast/room/web/enter")) {
           const value=xhr.responseType === "json" ? xhr.response : xhr.responseText;
           if (typeof value !== "string" || value.length <= 2 * 1024 * 1024) douyinDecoder.bindRoom(typeof value === "string" ? JSON.parse(value) : value, args[1]);
         } } catch (_) {sdk.captureRawGap?.("xhr_read_failed");}
@@ -81,7 +81,7 @@ const SocketHook = new Proxy(OriginalWebSocket, {
       const listener = event => {
         sdk.captureRaw?.("websocket","message",event.data);
         trackNetwork("websocket", typeof event.data === "string" ? "text" : "binary", typeof event.data === "string" ? event.data.length : event.data?.byteLength || event.data?.size || 0);
-        if (BOOT.rules_preview) douyinDecoder.observe(event.data, args[0]);
+        if ((BOOT.rules_preview || BOOT.unified_ui)) douyinDecoder.observe(event.data, args[0]);
       };
       socket.addEventListener("message", listener);
       socketListeners.set(socket, listener);
@@ -99,18 +99,27 @@ sdk.onDispose(() => {
 const seen = new WeakMap();
 let chatRoot = null, chatObserver = null, rootTimer = null;
 const publicRows = new Set();
-const publicScope=()=>BOOT.timed_messages?.count_scope==='public_screen';
 const publicRowId=row=>row.getAttribute?.('data-index');
 const observePublicRow=row=>{
   const id=publicRowId(row);
-  if(!publicScope()||id===null||id===undefined||!String(row.textContent||'').trim()||publicRows.has(id))return;
-  publicRows.add(id);
-  if(publicRows.size>16384)publicRows.delete(publicRows.values().next().value);
-  sdk.emit('public.activity','dom',{content:sdk.clean(row.textContent||'',512),decoder:'douyin.public_screen.v1',observed_at_ms:Date.now()},{native_event_id:'screen:'+id});
+  if(id===null||id===undefined||!String(row.textContent||'').trim()||publicRows.has(id))return;
+  if(sdk.emit('public.activity','dom',{decoder:'douyin.public_screen.v1',observed_at_ms:Date.now()},{native_event_id:'screen:'+id})){
+    publicRows.add(id);
+    if(publicRows.size>16384)publicRows.delete(publicRows.values().next().value);
+  }
 };
 const comment = row => {
-  const nickname = sdk.clean(row.querySelector('[class*="webcast-chatroom___user-name"], .hts-live-text-user')?.textContent || "", 128).trim().replace(/[：:]\s*$/, "").trim();
-  const content = sdk.clean(row.querySelector('[class*="webcast-chatroom___content"]')?.textContent || "");
+  const nameNode = row.querySelector('[class*="webcast-chatroom___user-name"], .hts-live-text-user');
+  const nickname = sdk.clean(nameNode?.textContent || "", 128).trim().replace(/[：:]\s*$/, "").trim();
+  let body = row.querySelector('[class*="webcast-chatroom___content"]')?.textContent || "";
+  // Some current rows have a nickname marker followed by plain spans/text,
+  // with no legacy content class. Read only the suffix after that marker.
+  if (!body && nameNode && document.createRange && row.childNodes) {
+    const range = document.createRange();
+    try { range.setStartAfter(nameNode); range.setEnd(row, row.childNodes.length); body = range.cloneContents().textContent || ''; }
+    catch (_) {} finally { range.detach?.(); }
+  }
+  const content = sdk.clean(body).trim().replace(/^[：:]\s*/, '');
   return { nickname, content, signature: JSON.stringify([row.getAttribute?.("data-index"), nickname, content]) };
 };
 const inspectNode = node => {
@@ -123,7 +132,7 @@ const inspectNode = node => {
     const { nickname, content, signature } = comment(row);
     if (seen.get(row) === signature) continue;
     seen.set(row, signature);
-    if (nickname && content) sdk.emit("chat.received", "dom", { content }, { nickname });
+    if (nickname && content) sdk.emit("chat.received", "dom", { content, observed_at_ms:Date.now(), decoder:'douyin.dom.v2' }, { nickname });
   }
 };
 const attachChat = () => {
@@ -146,4 +155,4 @@ const attachChat = () => {
 rootTimer = setInterval(attachChat, 1000);
 attachChat();
 sdk.onDispose(() => { clearInterval(rootTimer); chatObserver?.disconnect(); });
-sdk.emit("probe.status", "diagnostic", { stage: BOOT.rules_preview ? "douyin_read_only_decoder_installed" : "douyin_network_hooks_installed_no_decoder" });
+sdk.emit("probe.status", "diagnostic", { stage: (BOOT.rules_preview || BOOT.unified_ui) ? "douyin_read_only_decoder_installed" : "douyin_network_hooks_installed_no_decoder" });

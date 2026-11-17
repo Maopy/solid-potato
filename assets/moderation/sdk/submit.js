@@ -1,9 +1,9 @@
 // Attempt each command once. Do not wait for input clearing or a server echo.
 const submitFilledInput = async (context, node, text, deadline, contents, findButtons) => {
   const reject = reason => ({outcome:'rejected',reason});
-  const guard = () => context.inputSafe() && context.active() && context.sameRoom() && !context.paused() && !document.hidden &&
+  const guard = () => context.inputSafe() && context.active() && context.sameRoom() && !context.paused() && (!document.hidden || context.allowHidden === true) &&
     node.isConnected && performance.now() < deadline && String(contents(node)||'').replace(/[\u200b\ufeff]/g,'')===text.replace(/[\u200b\ufeff]/g,'');
-  if (BOOT.automatic_send !== true) return reject('invalid_command');
+  if (BOOT.automatic_send !== true && context.manual !== true) return reject('invalid_command');
   if (!guard()) return reject('input_changed');
   const visible = n => n.isConnected && n.ownerDocument===document && n.getClientRects().length &&
     !n.closest('[hidden],[inert],[aria-hidden="true"]') && window.getComputedStyle(n).visibility==='visible' &&

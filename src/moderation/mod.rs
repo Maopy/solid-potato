@@ -4,6 +4,8 @@ pub mod bridge;
 pub mod candidate_preview;
 pub mod config;
 pub mod control;
+pub mod decision;
+mod deepseek;
 pub mod delivery;
 pub mod engine;
 pub mod events;
@@ -19,18 +21,20 @@ pub mod nicknames;
 pub mod online;
 pub mod protocol;
 pub mod recording;
-pub mod room_profiles;
 pub(crate) mod recording_quality;
 pub mod replay;
+pub mod replies;
 pub mod retention;
+pub mod room_profiles;
 pub mod scheduler;
-pub mod speech;
 pub mod service;
+pub mod speech;
 pub mod system_proxy;
 pub mod templates;
 pub mod timed;
-mod welcome;
+pub mod timeline;
 mod upgrade;
+mod welcome;
 
 pub const RAW_CAPTURE: &str = include_str!("../../assets/moderation/sdk/raw.js");
 
@@ -39,6 +43,8 @@ pub const DOUYIN_ADAPTER: &str = include_str!("../../assets/moderation/adapters/
 pub const DOUYIN_DECODER: &str = include_str!("../../assets/moderation/adapters/douyin-decoder.js");
 pub const DOUYIN_FILL: &str = include_str!("../../assets/moderation/adapters/douyin-fill.js");
 pub const WECHAT_DESKTOP: &str = include_str!("../../assets/moderation/adapters/wechat-desktop.js");
+pub const WECHAT_PK_DIAGNOSTICS: &str =
+    include_str!("../../assets/moderation/adapters/wechat-pk-diagnostics.js");
 
 pub const WECHAT_FILL: &str = include_str!("../../assets/moderation/adapters/wechat-fill.js");
 

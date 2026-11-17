@@ -252,7 +252,7 @@ var ChannelsAPIOrigin = WXEnv.get("apiOrigin");
     selector: ".host__info .extra",
     container: "#app",
     onOk: function ($elm) {
-      if (window.__liveArchiveModerationV1) return;
+      if (window.__d_config?.unifiedUI || window.__liveArchiveModerationV1) return;
       if (__wx_live_download_btn) {
         return;
       }

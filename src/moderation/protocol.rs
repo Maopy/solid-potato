@@ -138,6 +138,8 @@ impl ProbeScope {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hello {
+    #[serde(default)]
+    pub client_version: Option<String>,
     pub v: u32,
     pub ticket: String,
     pub page_url: String,
@@ -203,8 +205,16 @@ pub fn sanitize(event: &ProbeEvent) -> ProbeEvent {
     let mut result = event.clone();
     let permitted: &[&str] = match event.event_type.as_str() {
         "public.activity" => &["content", "decoder", "observed_at_ms", "message_type"],
+        "room.profile" => &["nickname"],
         "recording.result" => &["request_id", "state", "message"],
-        "chat.received" => &["content", "decoder", "live_eligible", "observed_at_ms"],
+        "chat.received" | "chat.observed" => &[
+            "content",
+            "decoder",
+            "live_eligible",
+            "observed_at_ms",
+            "message_at_ms",
+            "fan_level",
+        ],
         "chat.keyword_candidate" | "chat.activity" => &[
             "content",
             "content_truncated",
@@ -226,11 +236,21 @@ pub fn sanitize(event: &ProbeEvent) -> ProbeEvent {
             "room_verified",
         ],
         "level.candidate" => &[
-            "message_type", "decoder", "upgrade_type", "previous_level", "new_level",
-            "recipient_user_id", "recipient_source", "observed_at_ms", "confidence", "live_eligible", "room_verified",
+            "message_type",
+            "decoder",
+            "upgrade_type",
+            "previous_level",
+            "new_level",
+            "recipient_user_id",
+            "recipient_source",
+            "observed_at_ms",
+            "confidence",
+            "live_eligible",
+            "room_verified",
         ],
         "member.candidate" => &[
             "supporter_title",
+            "fan_level",
             "message_type",
             "decoder",
             "arrival_text_match",

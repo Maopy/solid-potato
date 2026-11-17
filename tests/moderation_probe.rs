@@ -28,6 +28,7 @@ fn pair(bridge: &mut ProbeBridge) -> Value {
     let config: Value = serde_json::from_str(config).unwrap();
     bridge
         .hello(Hello {
+            client_version: None,
             client_id: None,
             v: VERSION,
             ticket: config["ticket"].as_str().unwrap().into(),
@@ -122,6 +123,7 @@ fn pairing_ticket_is_single_use_and_probe_has_no_send_commands() {
     )
     .unwrap();
     let hello = || Hello {
+        client_version: None,
         client_id: None,
         v: 1,
         ticket: config["ticket"].as_str().unwrap().into(),

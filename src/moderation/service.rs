@@ -99,7 +99,11 @@ pub async fn run_probe_with_options(
     options: ProbeOptions,
 ) -> Result<()> {
     let room_key = ProbeScope::from_room_url(room.clone())?.room_key;
-    let options = options.room_profiles.get(&room_key).map(|p|p.apply(&options)).unwrap_or(options);
+    let options = options
+        .room_profiles
+        .get(&room_key)
+        .map(|p| p.apply(&options))
+        .unwrap_or(options);
     let ProbeOptions {
         room_profiles,
         delivery,

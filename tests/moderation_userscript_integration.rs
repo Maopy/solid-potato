@@ -26,6 +26,29 @@ fn scope(page: &str, hello: &Value) -> Value {
     json!({"v":1,"connection_id":hello["connection_id"],"binding_id":hello["binding_id"],"page_url":page,"input_ready":true})
 }
 #[test]
+fn dashboard_manual_message_is_scoped_to_selected_douyin_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = hub(dir.path());
+    let a = "https://live.douyin.com/123";
+    let b = "https://live.douyin.com/456";
+    let boot = hub.bootstrap(a).unwrap();
+    let ha=hub.dispatch(a,"hello","",json!({"v":1,"ticket":boot["ticket"],"page_url":a,"document_id":"manual-doc","adapter_id":"douyin.live_page","client_version":env!("CARGO_PKG_VERSION")})).unwrap();
+    let hb = connect(&hub, b, &hub.bootstrap(b).unwrap());
+    assert!(hub.send_message("dy-123", "仅发送到甲").is_ok());
+    let pa = hub
+        .dispatch(a, "poll", ha["token"].as_str().unwrap(), scope(a, &ha))
+        .unwrap();
+    let pb = hub
+        .dispatch(b, "poll", hb["token"].as_str().unwrap(), scope(b, &hb))
+        .unwrap();
+    assert_eq!(pa["commands"][0]["text"], "仅发送到甲");
+    assert_eq!(pb["commands"], json!([]));
+    assert_eq!(
+        hub.rows().iter().find(|r| r["id"] == "dy-123").unwrap()["control"]["manual_message"]["state"],
+        "issued"
+    );
+}
+#[test]
 fn same_tab_refresh_replaces_old_binding_without_replaying_pending_commands() {
     let dir = tempfile::tempdir().unwrap();
     let hub = hub(dir.path());
@@ -96,6 +119,11 @@ async fn arbitrary_rooms_are_independent_default_off_and_bound_to_their_own_tick
     assert!(hub.dispatch(b,"hello","",json!({"v":1,"ticket":ba["ticket"],"page_url":b,"document_id":"bad","adapter_id":"douyin.live_page"})).is_err());
     let ha = connect(&hub, a, &ba);
     let hb = connect(&hub, b, &bb);
+    assert_eq!(
+        hub.rows().iter().find(|r| r["id"] == "dy-123").unwrap()["control"]["client_outdated"],
+        true,
+        "legacy scripts must show an update hint rather than silently missing public text"
+    );
     let token = ha["token"].as_str().unwrap();
     assert!(hub.dispatch(b, "poll", token, scope(b, &ha)).is_err());
     assert!(hub.dispatch(a, "poll", token, scope(b, &ha)).is_err());
@@ -123,6 +151,11 @@ async fn arbitrary_rooms_are_independent_default_off_and_bound_to_their_own_tick
             .is_string()
     );
     assert!(hub.authorize_recording(b, token, scope(b, &ha)).is_err());
+    hub.dispatch(a, "events", token, json!({"v":1,"connection_id":ha["connection_id"],"binding_id":ha["binding_id"],"first_seq":1,"events":[{"seq":1,"event_id":"host-name","event_type":"room.profile","source_kind":"diagnostic","payload":{"nickname":"测试主播"}}]})).unwrap();
+    let rows = hub.rows();
+    let named = rows.iter().find(|row| row["id"] == "dy-123").unwrap();
+    assert_eq!(named["label"], "测试主播");
+    assert_eq!(named["anchor_name"], "测试主播");
     assert_eq!(hub.rows().len(), 2);
 }
 #[tokio::test]
@@ -168,6 +201,22 @@ async fn transport_requires_pairing_key_has_no_cors_and_installs_static_code() {
         .await
         .unwrap();
     assert_eq!(r.status(), 403);
+    for origin in [
+        "https://live.douyin.com",
+        "https://www.douyin.com",
+        "https://douyin.com",
+    ] {
+        let response = client
+            .post(&endpoint)
+            .bearer_auth(&key)
+            .header("Origin", origin)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "supported origin {origin}");
+    }
     let text = client
         .post(&endpoint)
         .bearer_auth(&key)
@@ -350,6 +399,24 @@ fn like_claim_is_authenticated_persistent_and_independent_of_moderation_and_reco
         )
         .unwrap();
     assert_eq!(first["claimed"], true);
+    let action = h
+        .dispatch(
+            page,
+            "likes/tick",
+            hello["token"].as_str().unwrap(),
+            scope(page, &hello),
+        )
+        .unwrap();
+    assert_eq!(action["claimed"], true);
+    let early = h
+        .dispatch(
+            page,
+            "likes/tick",
+            hello["token"].as_str().unwrap(),
+            scope(page, &hello),
+        )
+        .unwrap();
+    assert_eq!(early["claimed"], false);
     assert_eq!(
         first["period_end_ms"].as_i64().unwrap() - first["period_start_ms"].as_i64().unwrap(),
         600000
@@ -391,4 +458,91 @@ fn like_claim_is_authenticated_persistent_and_independent_of_moderation_and_reco
     if last["period_start_ms"] == again["period_start_ms"] {
         assert_eq!(last["claimed"], false);
     }
+}
+
+#[test]
+fn speech_accepts_bound_legacy_scope_without_page_url_but_rejects_wrong_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = hub(dir.path());
+    let page = "https://live.douyin.com/123";
+    let boot = h.bootstrap(page).unwrap();
+    let hello = h.dispatch(page, "hello", "", json!({"v":1,"ticket":boot["ticket"],"page_url":page,"document_id":"doc","adapter_id":"douyin.live_page"})).unwrap();
+    let token = hello["token"].as_str().unwrap();
+    let request = json!({"scope":{"v":1,"connection_id":hello["connection_id"],"binding_id":hello["binding_id"]},"action":"status"});
+    assert!(h.dispatch(page, "speech", token, request.clone()).is_ok());
+    assert!(
+        h.dispatch(page, "speech", "wrong-token", request.clone())
+            .is_err()
+    );
+    let mut wrong = request;
+    wrong["scope"]["page_url"] = json!("https://live.douyin.com/456");
+    assert!(h.dispatch(page, "speech", token, wrong).is_err());
+}
+
+#[test]
+fn scoped_userscript_actions_inherit_room_binding_without_cross_room_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = hub(dir.path());
+    let page = "https://live.douyin.com/123";
+    let boot = h.bootstrap(page).unwrap();
+    let hello = h.dispatch(page,"hello","",json!({"v":1,"ticket":boot["ticket"],"document_id":"doc","adapter_id":"douyin.live_page","client_id":"6647e65f-df75-4f4c-a565-e076490400ee"})).unwrap();
+    let token = hello["token"].as_str().unwrap();
+    let scope =
+        json!({"v":1,"connection_id":hello["connection_id"],"binding_id":hello["binding_id"]});
+    assert!(
+        h.dispatch(
+            page,
+            "control",
+            token,
+            json!({"scope":scope,"enabled":false})
+        )
+        .is_ok()
+    );
+    assert!(
+        h.dispatch(
+            page,
+            "speech",
+            token,
+            json!({"scope":scope,"action":"status"})
+        )
+        .is_ok()
+    );
+    assert!(h.dispatch(page, "poll", token, scope.clone()).is_ok());
+    assert!(
+        h.dispatch(page, "likes/claim", token, scope.clone())
+            .is_ok()
+    );
+    assert!(h.dispatch(page, "likes/tick", token, scope.clone()).is_ok());
+    let mut wrong = scope.clone();
+    wrong["page_url"] = json!("https://live.douyin.com/456");
+    assert!(h.dispatch(page, "poll", token, wrong).is_err());
+    assert!(h.dispatch(page, "poll", "bad-token", scope).is_err());
+}
+
+#[tokio::test]
+async fn current_script_public_text_is_visible_with_moderation_off_and_never_replayed() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = hub(dir.path());
+    let page = "https://live.douyin.com/123";
+    let boot = hub.bootstrap(page).unwrap();
+    let hello=hub.dispatch(page,"hello","",json!({"v":1,"ticket":boot["ticket"],"page_url":page,"document_id":"new-client","adapter_id":"douyin.live_page","client_version":env!("CARGO_PKG_VERSION")})).unwrap();
+    assert_eq!(hub.rows()[0]["control"]["client_outdated"], false);
+    hub.dispatch(page,"events",hello["token"].as_str().unwrap(),json!({"v":1,"connection_id":hello["connection_id"],"binding_id":hello["binding_id"],"first_seq":1,"events":[{"seq":1,"event_id":"public-one","native_event_id":"native-one","event_type":"chat.observed","source_kind":"network","nickname":"小雨","payload":{"content":"这首歌叫什么？","live_eligible":false,"decoder":"douyin.pb.v1","observed_at_ms":chrono::Utc::now().timestamp_millis()}}]})).unwrap();
+    let history = hub.timeline("dy-123").unwrap();
+    assert_eq!(history["entries"][0]["text"], "这首歌叫什么？");
+    assert_eq!(hub.rows()[0]["control"]["enabled"], false);
+    hub.action("dy-123", Some(true)).unwrap();
+    let poll = hub
+        .dispatch(
+            page,
+            "poll",
+            hello["token"].as_str().unwrap(),
+            scope(page, &hello),
+        )
+        .unwrap();
+    assert_eq!(
+        poll["commands"],
+        json!([]),
+        "opening moderation never replies to display-only history"
+    );
 }

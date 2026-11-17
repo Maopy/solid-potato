@@ -62,6 +62,7 @@ fn desktop_scope_adapter_and_config_gate_actions_before_startup() {
     )
     .unwrap();
     let hello = |adapter: &str| Hello {
+        client_version: None,
         client_id: None,
         v: VERSION,
         ticket: boot["ticket"].as_str().unwrap().into(),
@@ -558,6 +559,7 @@ fn desktop_tabs_have_separate_bindings_and_refresh_replaces_only_the_same_tab() 
     let pair = |b: &mut ProbeBridge, client: &str, doc: &str| {
         let boot = b.bootstrap_config(&b.relay_token.clone()).unwrap();
         b.hello(Hello {
+            client_version: None,
             v: VERSION,
             client_id: Some(client.into()),
             ticket: boot["ticket"].as_str().unwrap().into(),

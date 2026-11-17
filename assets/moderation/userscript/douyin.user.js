@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         直播助手 · 抖音统一场控
 // @namespace    live-archive.local
-// @version      0.3.70
+// @version      0.5.12
 // @description  抖音直播页连接本机场控，支持场控开关、互动与录制。
 // @match        https://live.douyin.com/*
 // @match        https://www.douyin.com/*
@@ -31,7 +31,9 @@ const runRoom=async(roomUrl)=>{
 let earlyXhrRestore=()=>{};
 
 const base=__BASE_JSON__,key=__KEY_JSON__;
+const userscriptClientVersion=__CLIENT_VERSION_JSON__;
 let alive=true,ready=false,frameConsumer=null,metadataConsumer=null;
+let offlineDispose=()=>{},offlineError='正在连接本机中控，请稍候';
 const socketCleanups=new Set(),frames=[],metadata=[];
 let bufferedBytes=0;
 const currentRoom=()=>alive&&roomForLocation()===roomUrl;
@@ -70,7 +72,7 @@ const rememberMetadata=async(response,url)=>{
 };
 const earlyFetch=function(...args){const result=Reflect.apply(earlyOriginalFetch,this,args);try{const url=new URL(args[0]?.url||args[0],location.href);if(/(^|\.)douyin\.com$/.test(url.hostname)&&url.pathname.includes('/webcast/room/web/enter')&&url.searchParams.get('web_rid')===new URL(roomUrl).pathname.slice(1))void result.then(r=>rememberMetadata(r,url.href)).catch(()=>{});}catch(_){}return result;};
 window.fetch=earlyFetch;
-const cleanupEarly=()=>{alive=false;earlyXhrRestore();for(const fn of Array.from(socketCleanups))fn();frames.length=0;metadata.length=0;if(window.WebSocket===earlySocket)window.WebSocket=OriginalSocket;if(window.fetch===earlyFetch)window.fetch=earlyOriginalFetch;document.getElementById('live-archive-connecting')?.remove();};
+const cleanupEarly=()=>{alive=false;offlineDispose();earlyXhrRestore();for(const fn of Array.from(socketCleanups))fn();frames.length=0;metadata.length=0;if(window.WebSocket===earlySocket)window.WebSocket=OriginalSocket;if(window.fetch===earlyFetch)window.fetch=earlyOriginalFetch;document.getElementById('live-archive-connecting')?.remove();};
 const earlyOpen=XMLHttpRequest.prototype.open,earlyXhrListeners=new Map();
 const earlyXhr=function(...args){
   const result=Reflect.apply(earlyOpen,this,args);
@@ -88,11 +90,18 @@ XMLHttpRequest.prototype.open=earlyXhr;
 earlyXhrRestore=()=>{if(XMLHttpRequest.prototype.open===earlyXhr)XMLHttpRequest.prototype.open=earlyOpen;for(const fn of Array.from(earlyXhrListeners.values()))fn();};
 leaveRoom=()=>{window.__liveArchiveModerationV1?.dispose();cleanupEarly();delete window.__liveArchiveModerationV1;for(const id of ['live-archive-assistant','live-archive-recording'])document.getElementById(id)?.remove();};
 window.addEventListener('pagehide',()=>{window.__liveArchiveModerationV1?.dispose();cleanupEarly();},{once:true});
-const showConnecting=message=>{
-  if(!document.body)return;
-  let box=document.getElementById('live-archive-connecting');if(!box){box=document.createElement('div');box.id='live-archive-connecting';Object.assign(box.style,{position:'fixed',right:'20px',top:'16px',zIndex:2147483647,background:'#fff',color:'#222',padding:'12px',font:'14px sans-serif',border:'1px solid #ccc',borderRadius:'8px'});document.body.appendChild(box);}box.textContent=message;
+const showOfflinePanel=()=>{
+  if(!currentRoom()||ready||!document.body||document.getElementById('live-archive-assistant'))return;
+  const disposers=[],fail=()=>{throw Error(offlineError);};
+  const BOOT={adapter_id:'douyin.live_page',unified_ui:true,offline:true,recording:true,speech_recognition:true,likes:{enabled:true}};
+  const sdk={getStatus:()=>({connected:false,stopped:false,draining:false,moderation_enabled:false}),
+    getRecordingStatus:()=>({state:'idle'}),refreshRecording:()=>Promise.resolve(),startRecording:fail,pauseRecording:fail,resumeRecording:fail,
+    getSpeechStatus:()=>({enabled:false,state:'off',recent:[],error:null}),refreshSpeech:()=>Promise.resolve(),setSpeechEnabled:fail,
+    setModerationEnabled:fail,likes:{getStatus:()=>({enabled:false,picking:false}),setEnabled:fail},onDispose:fn=>disposers.push(fn)};
+  /*__OFFLINE_PANEL__*/
+  offlineDispose=()=>{for(const dispose of disposers.splice(0))dispose();document.getElementById('live-archive-assistant')?.remove();};
 };
-document.addEventListener('DOMContentLoaded',()=>{if(!ready)showConnecting('直播助手 · 正在连接本机场控…');},{once:true});
+if(document.body)showOfflinePanel();else document.addEventListener('DOMContentLoaded',showOfflinePanel,{once:true});
 const request=payload=>new Promise((resolve,reject)=>{
   if(!currentRoom()&&payload.endpoint!=='goodbye'){reject(Error('直播间已切换，请刷新页面'));return;}
   GM_xmlhttpRequest({method:'POST',url:base+'/v1/userscript',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},data:JSON.stringify({room_url:roomUrl,...payload}),timeout:2500,anonymous:true,
@@ -101,11 +110,20 @@ const request=payload=>new Promise((resolve,reject)=>{
 });
 let BOOT;
 while(currentRoom()){
-  try{BOOT=await request({endpoint:'bootstrap'});break;}catch(e){showConnecting('直播助手 · '+e.message);await new Promise(resolve=>setTimeout(resolve,3000));}
+  try{BOOT=await request({endpoint:'bootstrap'});break;}catch(e){
+    offlineError=e.status===403?'本机场控身份校验失败，请从当前中控重新安装抖音场控脚本后刷新直播间':(e.message||'本机场控连接失败，请稍后重试');
+    await new Promise(resolve=>setTimeout(resolve,3000));
+  }
 }
 if(!currentRoom()){cleanupEarly();return;}
-if(BOOT.room_url!==roomUrl){showConnecting('直播助手 · 房间绑定不匹配，请刷新页面');cleanupEarly();return;}
-if(window.__liveArchiveModerationV1){showConnecting('直播助手 · 检测到已有场控脚本，请停用旧代理注入后刷新');cleanupEarly();return;}
+if(BOOT.room_url!==roomUrl||window.__liveArchiveModerationV1){
+  offlineError=BOOT.room_url!==roomUrl?'房间绑定不匹配，请刷新页面':'检测到已有场控脚本，请停用旧代理注入后刷新';
+  alive=false;earlyXhrRestore();for(const fn of Array.from(socketCleanups))fn();frames.length=0;metadata.length=0;
+  if(window.WebSocket===earlySocket)window.WebSocket=OriginalSocket;if(window.fetch===earlyFetch)window.fetch=earlyOriginalFetch;
+  return;
+}
+const wasExpanded=document.querySelector?.('#live-archive-assistant button[aria-expanded="true"]')!=null;
+offlineDispose();offlineDispose=()=>{};
 // Release constructors before installing the normal adapters; keep listeners on sockets opened during pairing.
 if(window.WebSocket===earlySocket)window.WebSocket=OriginalSocket;
 if(window.fetch===earlyFetch)window.fetch=earlyOriginalFetch;
@@ -124,8 +142,9 @@ const userscriptRecordingTransport=(action,body)=>{
 /*__FILL__*/
 if(BOOT.recording||BOOT.speech_recognition){/*__RECORDING__*/}
 /*__PANEL__*/
+if(wasExpanded)document.querySelector?.('#live-archive-assistant button[aria-expanded="false"]')?.click();
 metadataConsumer=(value,url)=>{if(currentRoom())douyinDecoder.bindRoom(value,url);};
-frameConsumer=(data,url)=>{if(!currentRoom())return;sdk.captureRaw?.('websocket','message',data);if(BOOT.rules_preview)douyinDecoder.observe(data,url);};
+frameConsumer=(data,url)=>{if(!currentRoom())return;sdk.captureRaw?.('websocket','message',data);if((BOOT.rules_preview || BOOT.unified_ui))douyinDecoder.observe(data,url);};
 for(const item of metadata.splice(0))metadataConsumer(...item);
 for(const item of frames.splice(0))frameConsumer(...item);bufferedBytes=0;
 ready=true;document.getElementById('live-archive-connecting')?.remove();
@@ -136,5 +155,8 @@ for(const name of ['pushState','replaceState'])if(window.history?.[name]){const 
 window.addEventListener('popstate',route);
 const routeTimer=setInterval(route,500);
 window.addEventListener('pagehide',()=>{clearInterval(routeTimer);leaveRoom?.();},{once:true});
+// pagehide disposes the bridge; a document restored from the back/forward
+// cache must start afresh instead of showing its old, stopped panel.
+window.addEventListener('pageshow',event=>{if(event.persisted)window.location.reload();});
 route();
 })();

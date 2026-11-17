@@ -57,6 +57,7 @@ struct Pending {
 }
 pub struct CandidatePreview {
     target: String,
+    gift_enabled: bool,
     upgrades: super::upgrade::CandidateUpgrades,
     welcomes: super::welcome::CandidateWelcomes,
     seen: HashSet<(String, String)>,
@@ -81,6 +82,7 @@ impl CandidatePreview {
     pub fn with_format(target: String, config: &super::engine::RulesConfig) -> Result<Self> {
         let max_text_chars = config.max_text_chars.min(80);
         Ok(Self {
+            gift_enabled: config.gift_enabled,
             upgrades: super::upgrade::CandidateUpgrades::new(config)?,
             target,
             welcomes: super::welcome::CandidateWelcomes::new(config)?,
@@ -99,6 +101,16 @@ impl CandidatePreview {
             .with_nicknames(&config.gift_nicknames)?,
             max_text_chars,
         })
+    }
+    /// Keep the current recipient, deduplication and pending gift windows.
+    pub fn update_rules(&mut self, config: &super::engine::RulesConfig) -> Result<()> {
+        let next = Self::with_format(self.target.clone(), config)?;
+        self.welcomes.update_rules(config)?;
+        self.upgrades.update_rules(config)?;
+        self.gift_text = next.gift_text;
+        self.gift_enabled = next.gift_enabled;
+        self.max_text_chars = next.max_text_chars;
+        Ok(())
     }
     fn note(&mut self, reason: &str) {
         *self.counters.entry(reason.into()).or_default() += 1;
@@ -205,6 +217,16 @@ impl CandidatePreview {
             event.event_type.as_str(),
             "gift.candidate" | "gift.candidate_revision"
         ) {
+            return vec![];
+        }
+        if !self.gift_enabled
+            && (event.event_type == "gift.candidate"
+                || !event
+                    .user_id
+                    .as_ref()
+                    .is_some_and(|user| self.pending.contains_key(user)))
+        {
+            self.note("rule_disabled");
             return vec![];
         }
         let (Some(user), Some(id)) = (event.user_id.as_deref(), event.native_event_id.as_deref())

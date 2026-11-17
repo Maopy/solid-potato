@@ -242,7 +242,9 @@ async fn handle(
                 br#"{"error":"invalid_method"}"#.to_vec(),
             )
         } else if request.path == "/v1/bootstrap" {
-            let identity = serde_json::from_slice::<Value>(&request.body).ok().and_then(|v| v["room_identity"].as_str().map(str::to_owned));
+            let identity = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|v| v["room_identity"].as_str().map(str::to_owned));
             match bridge.bootstrap_for_room(&request.bearer, identity.as_deref()) {
                 Ok(script) => (200, "application/javascript", script.into_bytes()),
                 Err(_) => (
@@ -274,6 +276,8 @@ async fn handle(
                 }
                 "/v1/likes/claim" => bridge
                     .claim_like_period(&request.bearer, serde_json::from_slice(&request.body)?),
+                "/v1/likes/tick" => bridge
+                    .claim_like_action(&request.bearer, serde_json::from_slice(&request.body)?),
                 "/v1/poll" => bridge.poll(&request.bearer, serde_json::from_slice(&request.body)?),
                 "/v1/results" => {
                     bridge.fill_result(&request.bearer, serde_json::from_slice(&request.body)?)

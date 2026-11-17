@@ -91,18 +91,14 @@ impl FfmpegRecorder {
         let segment_prefix = Local::now().format("%Y-%m-%d-%H-%M-%S").to_string();
         let index = next_segment_index(&task.output_dir, &segment_prefix)?;
         let output = task.output_dir.join(format!("{segment_prefix}-%03d.ts"));
-        let mut child = Command::new(&self.config.ffmpeg_path)
-            .args([
-                "-stdin",
-                "-y",
-                "-i",
-                stream.stream_url.as_str(),
-                "-c",
-                "copy",
-                "-f",
-                "segment",
-                "-segment_time",
-            ])
+        let mut command = Command::new(&self.config.ffmpeg_path);
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
+        command.args(["-stdin", "-y", "-i", stream.stream_url.as_str()]);
+        // Preserve the selected live stream without a second encoding pass.
+        command.args(["-c", "copy"]);
+        let mut child = command
+            .args(["-f", "segment", "-segment_time"])
             .arg(self.config.segment_seconds.to_string())
             .arg("-segment_start_number")
             .arg(index.to_string())
@@ -165,7 +161,10 @@ impl FfmpegRecorder {
         for segment in segments {
             let mp4 = segment.with_extension("mp4");
             let temporary_mp4 = temporary_mp4_path(&mp4);
-            let status = Command::new(&self.config.ffmpeg_path)
+            let mut command = Command::new(&self.config.ffmpeg_path);
+            #[cfg(windows)]
+            command.creation_flags(0x08000000);
+            let status = command
                 .args(["-nostdin", "-y", "-i"])
                 .arg(&segment)
                 .args(["-c", "copy", "-movflags", "+faststart"])

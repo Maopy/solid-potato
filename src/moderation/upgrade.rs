@@ -29,6 +29,14 @@ impl CandidateUpgrades {
             limit: config.max_text_chars.min(80),
         })
     }
+    pub fn update_rules(&mut self, config: &RulesConfig) -> Result<()> {
+        let next = Self::new(config)?;
+        self.enabled = next.enabled;
+        self.template = next.template;
+        self.nicknames = next.nicknames;
+        self.limit = next.limit;
+        Ok(())
+    }
     pub fn ingest(&mut self, now: u64, event: &ProbeEvent, target: &str) -> Vec<Value> {
         let p = &event.payload;
         if !self.enabled

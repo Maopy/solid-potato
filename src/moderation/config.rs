@@ -32,7 +32,8 @@ pub struct ModerationConfig {
     #[serde(default)]
     pub room_profiles: std::collections::BTreeMap<String, serde_yaml_ng::Value>,
     #[serde(skip)]
-    pub resolved_room_profiles: std::collections::BTreeMap<String, super::room_profiles::RoomProfile>,
+    pub resolved_room_profiles:
+        std::collections::BTreeMap<String, super::room_profiles::RoomProfile>,
     pub version: u32,
     #[serde(default)]
     pub mode: Mode,
@@ -130,6 +131,23 @@ pub struct Rule {
     pub enabled: bool,
     pub template: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SupporterRule {
+    pub enabled: bool,
+    pub template: Option<String>,
+    pub min_fansclub_level: Option<u32>,
+}
+impl Default for SupporterRule {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            template: None,
+            min_fansclub_level: None,
+        }
+    }
+}
 impl Default for Rule {
     fn default() -> Self {
         Self {
@@ -190,7 +208,7 @@ impl Default for UpgradeRule {
 pub struct RuleSettings {
     pub gift: GiftRule,
     pub welcome: Rule,
-    pub supporter_welcome: Rule,
+    pub supporter_welcome: SupporterRule,
     pub fansclub_joined: Rule,
     pub upgrade: UpgradeRule,
 }
@@ -234,8 +252,57 @@ impl ModerationConfig {
             .context("configuration has no parent")?
             .to_path_buf();
         let profiles = std::mem::take(&mut config.room_profiles);
-        config.resolved_room_profiles = super::room_profiles::load(&source, &base, &config.room.platform, profiles)?;
+        config.resolved_room_profiles =
+            super::room_profiles::load(&source, &base, &config.room.platform, profiles)?;
         config.prepare(&base)?;
+        let overlays = super::room_profiles::read_rule_overlays(path)?;
+        let fallback = super::room_profiles::RoomProfile::from_config(&config);
+        for (room, patch) in overlays {
+            let valid = if config.room.platform == "douyin" {
+                !room.is_empty()
+                    && room.len() <= 20
+                    && !room.starts_with('0')
+                    && room.bytes().all(|b| b.is_ascii_digit())
+            } else {
+                super::events::valid_user_id(&room)
+                    && !room.trim().is_empty()
+                    && room.trim() == room
+            };
+            if !valid {
+                bail!("invalid room override identity");
+            }
+            let profile = config
+                .resolved_room_profiles
+                .entry(room.clone())
+                .or_insert_with(|| fallback.clone());
+            if let Some(timed) = &patch.timed_messages {
+                timed.validate(profile.rules.max_text_chars)?;
+                profile.timed = timed.clone();
+            }
+            if let Some(keywords) = &patch.keyword_replies {
+                keywords.validate(profile.rules.max_text_chars)?;
+                profile.keywords = keywords.clone();
+            }
+            if let Some(likes) = &patch.likes {
+                likes.validate(&config.room.platform)?;
+                profile.likes = likes.clone();
+            }
+            patch.apply(&mut profile.rules);
+            if (profile.timed.enabled || profile.keywords.enabled)
+                && (!config.sending.automatic
+                    || !matches!(
+                        config.mode,
+                        super::config::Mode::FillOnly | super::config::Mode::CandidateFillOnly
+                    ))
+            {
+                bail!("room message settings require automatic sending");
+            }
+            super::engine::Engine::new(profile.rules.clone())?;
+            super::candidate_preview::CandidatePreview::with_format(room, &profile.rules)?;
+        }
+        if config.resolved_room_profiles.len() > 32 {
+            bail!("room profiles allow at most 32 rooms");
+        }
         Ok(config)
     }
 
@@ -355,6 +422,14 @@ impl ModerationConfig {
                 "automatic sending requires an injection fill mode without fill_test_text or TLS diagnostics"
             );
         }
+        if self
+            .rules
+            .supporter_welcome
+            .min_fansclub_level
+            .is_some_and(|n| !(1..=100000).contains(&n))
+        {
+            bail!("supporter_welcome.min_fansclub_level must be 1..100000");
+        }
         Engine::new(self.rules_config()).context("invalid moderation rules")?;
         self.scheduler.validate()?;
         Ok(())
@@ -370,6 +445,7 @@ impl ModerationConfig {
             gift_nicknames: self.nickname_mapping.users.clone(),
             welcome_enabled: self.rules.welcome.enabled,
             supporter_welcome_enabled: self.rules.supporter_welcome.enabled,
+            supporter_min_fansclub_level: self.rules.supporter_welcome.min_fansclub_level,
             supporter_welcome_template: self
                 .rules
                 .supporter_welcome

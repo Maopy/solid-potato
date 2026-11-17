@@ -10,15 +10,17 @@
     const value=await r.json();if(!r.ok||value.code!==0)throw Error(value.msg||'录制服务暂不可用');return value.data;
   };
   const streams=new Map();
+  let streamOrder=0;
   let metadataReceived=false,anchorName=null;
   const tier=name=>{name=String(name||'').toLowerCase();return /origin|原画|蓝光/.test(name)?6:/uhd|4k|超高清/.test(name)?5:/full_hd|fhd|1080|超清/.test(name)?4:/^hd\d*$|高清|720/.test(name)?3:/^sd\d*$|标清/.test(name)?2:/^ld\d*$|流畅/.test(name)?1:0;};
   const qualityInfo=(label,params={})=>{
     if(typeof params==='string')try{params=JSON.parse(params);}catch(_){params={};}
     const dimensions=String(params?.resolution||'').match(/(\d+)\s*[xX*]\s*(\d+)/);
-    return {label:label||'当前播放清晰度',tier:tier(label),pixels:dimensions?Number(dimensions[1])*Number(dimensions[2]):Number(params?.width||0)*Number(params?.height||0),bitrate:Number(params?.vbitrate||params?.bitrate||0)||0};
+    const width=dimensions?Number(dimensions[1]):Number(params?.width||0),height=dimensions?Number(dimensions[2]):Number(params?.height||0);
+    return {label:label||'当前播放清晰度',tier:tier(label),pixels:width*height,width,height,bitrate:Number(params?.vbitrate||params?.bitrate||0)||0};
   };
   const compare=(a,b)=>a.tier-b.tier||a.pixels-b.pixels||a.bitrate-b.bitrate;
-  const add=(url,label,params)=>{if(typeof url!=='string'||!/^https?:\/\//i.test(url))return;try{const u=new URL(url);if(u.username||u.password)return;const info=qualityInfo(label,params),old=streams.get(url);if(!old||compare(info,old)>0)streams.set(url,info);if(streams.size>24){const entries=[...streams].sort((a,b)=>compare(b[1],a[1]));streams.clear();for(const entry of entries.slice(0,24))streams.set(...entry);}}catch(_){}};
+  const add=(url,label,params)=>{if(typeof url!=='string'||!/^https?:\/\//i.test(url))return;try{const u=new URL(url);if(u.username||u.password)return;const info=qualityInfo(label,params),old=streams.get(url);if(!old||compare(info,old)>0)streams.set(url,{...info,order:old?.order??++streamOrder});if(streams.size>24){const entries=[...streams].sort((a,b)=>compare(b[1],a[1])||b[1].order-a[1].order);streams.clear();for(const entry of entries.slice(0,24))streams.set(...entry);}}catch(_){}};
   const scan=(value,depth=0,seen=new Set(),label='')=>{
     if(depth>10||!value||typeof value!=='object'||seen.has(value))return;seen.add(value);
     for(const [key,v] of Object.entries(value).slice(0,100)){
@@ -35,7 +37,7 @@
     // These containers represent the current room, excluding recommendation lists.
     const roots=[value?.data?.data?.[0],value?.app?.initialState?.roomStore?.roomInfo?.room,
       value?.roomStore?.roomInfo?.room,value?.props?.pageProps?.room];
-    for(const root of roots)if(root){scan(root.stream_url||root);const name=root.owner?.nickname||root.owner_user?.nickname;if(typeof name==='string'&&name.trim())anchorName=name.trim();}
+    for(const root of roots)if(root){scan(root.stream_url||root);const name=root.owner?.nickname||root.owner_user?.nickname;if(typeof name==='string'&&name.trim())anchorName=name.trim();if(anchorName&&typeof sdk!=='undefined')sdk.reportRoomName?.(anchorName);}
   };
   // Reuse the room-scoped fetch/XHR metadata captured from document-start,
   // including responses that arrived before the local pairing completed.
@@ -71,7 +73,7 @@
     const status=document.createElement('div');status.textContent='点击录制当前直播';
     const toggle=document.createElement('button');toggle.type='button';toggle.textContent='下载任务';
     const list=document.createElement('div');list.hidden=true;
-    // Recording always uses the highest advertised quality, independently of playback.
+    // Use the highest available source for local encoding.
     const update=()=>{refreshStreams();quality.replaceChildren();const entries=[...streams].sort((a,b)=>compare(b[1],a[1]));for(const [url,info] of entries){const o=document.createElement('option');o.value=url;o.textContent=info.label;quality.appendChild(o);}quality.value=entries[0]?.[0]||'';quality.disabled=true;quality.hidden=streams.size<2;};
     let busy=false;
     const start=async()=>{
@@ -83,7 +85,7 @@
         status.textContent='';await render();return created;
       }finally{busy=false;button.disabled=false;}
     };
-    const controller={start,getAudioSource:()=>{if(!inRoom())throw Error('直播间已切换');refreshStreams();const entries=[...streams].sort((a,b)=>compare(a[1],b[1]));if(!entries.length)throw Error('请先进入并播放直播');return entries[0][0];},getStatus:()=>({stream_count:streams.size,room_metadata_received:metadataReceived,quality:streams.get(quality.value)?.label||null}),showTasks:()=>{box.style.display='block';list.hidden=false;return render();}};
+    const controller={start,getAnchorName:()=>{if(!inRoom())return null;refreshStreams();return anchorName;},getAudioSource:()=>{if(!inRoom())throw Error('直播间已切换');refreshStreams();const entries=[...streams].sort((a,b)=>compare(a[1],b[1])||b[1].order-a[1].order);if(!entries.length)throw Error('请先进入并播放直播');return entries[0][0];},getStatus:()=>({stream_count:streams.size,room_metadata_received:metadataReceived,quality:streams.get(quality.value)?.label||null}),showTasks:()=>{box.style.display='block';list.hidden=false;return render();}};
     window.__liveArchiveRecordingController=controller;
     button.onclick=()=>start().catch(e=>status.textContent=e.message);
     const names={waiting:'等待启动',downloading:'录制中',paused:'已暂停',finished:'已完成',failed:'失败'};

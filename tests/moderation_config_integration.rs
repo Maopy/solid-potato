@@ -603,7 +603,7 @@ fn shipped_wording_fragment_has_38_valid_editable_presets() {
 }
 
 #[test]
-fn shared_nickname_table_is_platform_scoped_and_room_overrides_reach_gift_drafts_only() {
+fn shared_nickname_table_is_platform_scoped_and_room_overrides_reach_welcome_drafts() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path().join("config");
     fs::create_dir(&config_dir).unwrap();
@@ -633,7 +633,7 @@ fn shared_nickname_table_is_platform_scoped_and_room_overrides_reach_gift_drafts
     assert!(
         logs.iter()
             .filter_map(|a| a.action.as_ref())
-            .any(|a| a.text == "欢迎平台昵称来到直播间")
+            .any(|a| a.text == "欢迎房间称呼来到直播间")
     );
     // The same stable ID in a different platform namespace has its own alias.
     let wx = base

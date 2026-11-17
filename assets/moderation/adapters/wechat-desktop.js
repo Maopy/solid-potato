@@ -11,15 +11,16 @@ const wxStatus = { adapter: 'wechat_channels.desktop_probe', coverage: 'candidat
   event_bus: false, dropped: 0, hook_replaced: false, native_bridge: false, native_hooks: 0, native_methods: [], interaction_decoding: 'wechat.type1_candidate' };
 const wxPublish = () => sdk.setDecoderStatus({ ...wxStatus });
 const wxSetCollecting = value => {
-  if (value && !sdk.getStatus().stopped) wxRepairHooks();
-  const next = value && !sdk.getStatus().stopped;
+  const state = sdk.getStatus();
+  const next = value && !state.stopped && !state.draining;
+  if (next) wxRepairHooks();
   if (next !== wxCollecting) wxKeywordFloor = null;
   wxCollecting = next;
   if (!wxCollecting) wxMatchPending.length = 0;
   wxStatus.collecting = wxCollecting; wxPublish();
   sdk.emit('probe.status', 'diagnostic', { stage: wxCollecting ? 'wechat_collection_started' : 'wechat_collection_paused' });
 };
-sdk.onModerationChange?.(enabled=>{Promise.resolve().then(()=>wxSetCollecting(enabled));});
+sdk.onModerationChange?.(enabled=>{Promise.resolve().then(()=>wxSetCollecting(BOOT.unified_ui===true||enabled));});
 const wxRelevant = value => {
   try {
     const u = new URL(typeof value === 'string' ? value : value.url, location.href);
@@ -477,6 +478,16 @@ const wxChatCandidate = (channel, entry) => {
 };
 sdk.onDispose(() => wxChatSeen.clear());
 sdk.onDrain(() => wxSetCollecting(false));
+// In observed native public messages type 4 is the fan badge; type 2 is a
+// separate viewer level. Ambiguous or malformed badges are left undisplayed.
+const wxFanLevel=entry=>{
+  const badges=wxOwnValue(wxOwnValue(entry,'finder_live_contact'),'badge_infos');
+  if(!Array.isArray(badges)||badges.length>32)return null;
+  const fans=badges.filter(b=>wxOwnValue(b,'badge_type')===4);
+  if(fans.length!==1)return null;
+  const level=wxOwnValue(fans[0],'badge_level'),name=wxOwnValue(fans[0],'badge_name');
+  return Number.isSafeInteger(level)&&level>0&&level<=100000&&typeof name==='string'&&name.trim()&&name.length<=128?level:null;
+};
 // Arrival candidates require the native notice type, a stable contact and the
 // exact arrival wording. Ordinary type=1 chat and suffix-only matches stay chat.
 const wxArrivalSeen = new Set();
@@ -510,9 +521,10 @@ const wxArrivalCandidate = (channel, entry) => {
     if (title === '星守护') { supporterTitle = 'star_guardian'; break; }
     if (title === '超粉') supporterTitle = 'super_fan';
   }
+  const fanLevel=wxFanLevel(entry);
   if (sdk.emit('member.candidate','network',{
     message_type:10005, decoder:'wechat.msg_list.arrival.candidate.v1',
-    arrival_text_match:true, ...(supporterTitle?{supporter_title:supporterTitle}:{}),
+    arrival_text_match:true, ...(supporterTitle?{supporter_title:supporterTitle}:{}), ...(fanLevel?{fan_level:fanLevel}:{}),
     observed_at_ms:Date.now(), confidence:'candidate',
     live_eligible:false, room_verified:false
   },{native_event_id:id,user_id:user,nickname:name})) {
@@ -632,24 +644,22 @@ const wxPollSucceeded=base=>{
   return (lower!==undefined||upper!==undefined)&&(lower===undefined||lower===0)&&(upper===undefined||upper===0);
 };
 // A first successful poll establishes a watermark, never welcomes historical chat.
-let wxKeywordFloor=null, wxKeywordWindow=0, wxKeywordQuota=0, wxActivityQuota=0;
+let wxKeywordFloor=null, wxKeywordWindow=0, wxActivityQuota=0;
 const wxMessageSequence=value=>{
   if(typeof value==='number')return Number.isSafeInteger(value)&&value>0?BigInt(value):null;
   return typeof value==='string'&&/^[1-9][0-9]{0,19}$/.test(value)?BigInt(value):null;
 };
 const wxActivitySeen=new Set();
 const wxPublicActivity=(id,type)=>{
-  if(!wxCollecting||BOOT.timed_messages?.count_scope!=='public_screen'||!BOOT.timed_messages?.enabled||!BOOT.timed_messages.min_comments)return;
+  if(!wxCollecting)return;
   const key='public:'+id;
   if(wxActivitySeen.has(key)||sdk.getStatus().buffered>=499)return;
   if(sdk.emit('public.activity','network',{decoder:'wechat.msg_list.public.v1',observed_at_ms:Date.now(),message_type:type},{native_event_id:id})){
     wxActivitySeen.add(key);if(wxActivitySeen.size>16384)wxActivitySeen.delete(wxActivitySeen.values().next().value);
   }
 };
-const wxKeywordSeen=new Set();
 const wxObserveKeywords=messages=>{
-  const activity=BOOT.timed_messages?.enabled&&BOOT.timed_messages.min_comments>0;
-  if((!BOOT.keyword_replies?.enabled&&!activity)||!wxCollecting||sdk.getStatus().stopped)return;
+  if(!wxCollecting||sdk.getStatus().stopped)return;
   const floor=wxKeywordFloor;
   let highest=floor;
   for(const entry of messages.slice(0,500)){
@@ -658,11 +668,11 @@ const wxObserveKeywords=messages=>{
   }
   wxKeywordFloor=highest;
   if(floor===null)return;
-  if(Date.now()-wxKeywordWindow>=60000){wxKeywordWindow=Date.now();wxKeywordQuota=0;wxActivityQuota=0;}
+  if(Date.now()-wxKeywordWindow>=60000){wxKeywordWindow=Date.now();wxActivityQuota=0;}
   for(const entry of messages.slice(0,500)){
     const seq=wxMessageSequence(wxOwnValue(entry,'seq'));
     if(seq===null||seq<=floor)continue;
-    if(activity&&BOOT.timed_messages?.count_scope==='public_screen'){
+    {
       // msg_list is the native public message list. Count each new list entry
       // regardless of type/content/author; the first poll is a baseline.
       const rawId=wxOwnValue(entry,'client_msg_id');
@@ -672,8 +682,14 @@ const wxObserveKeywords=messages=>{
     if(wxOwnValue(entry,'type')!==1)continue;
     const id=wxOwnValue(entry,'client_msg_id'),user=wxOwnValue(entry,'username'),text=wxOwnValue(entry,'content');
     if(!wxIdentifier(id)||!wxIdentifier(user,256)||typeof text!=='string'||!text.trim()||Array.from(text).length>256||/[\u0000-\u001f\u007f-\u009f]/.test(text)||wxJsonObjectText(text))continue;
+    if(BOOT.unified_ui){
+      const nickname=wxGiftNickname(wxOwnValue(entry,'from_user_contact'))||wxOwnValue(entry,'nickname');
+      const fanLevel=wxFanLevel(entry);
+      sdk.emit('chat.observed','network',{content:text,...(fanLevel?{fan_level:fanLevel}:{}),observed_at_ms:Date.now(),decoder:'wechat.msg_list.observed.v1'},
+        {native_event_id:id,user_id:user,...(typeof nickname==='string'?{nickname:sdk.clean(nickname,128)}:{})});
+    }
     const activityKey=JSON.stringify([user,id]);
-    if(activity&&BOOT.timed_messages?.count_scope!=='public_screen'&&!wxActivitySeen.has(activityKey)&&wxActivityQuota<600&&sdk.getStatus().buffered<499){
+    if(!wxActivitySeen.has(activityKey)&&wxActivityQuota<600&&sdk.getStatus().buffered<499){
       if(sdk.emit('chat.activity','network',{content:text,content_truncated:false,message_type:1,
         decoder:'wechat.msg_list.activity.v1',keyword_live:true,observed_at_ms:Date.now(),
         confidence:'candidate',live_eligible:false,room_verified:false},{native_event_id:id,user_id:user})){
@@ -681,21 +697,11 @@ const wxObserveKeywords=messages=>{
         if(wxActivitySeen.size>2048)wxActivitySeen.delete(wxActivitySeen.values().next().value);
       }
     }
-    const lower=text.toLowerCase();
-    if(!BOOT.keyword_replies?.enabled||!BOOT.keyword_replies.rules.some(r=>r.keywords.some(k=>r.match_mode==='exact'?lower===k.toLowerCase():lower.includes(k.toLowerCase()))))continue;
-    const key=JSON.stringify([user,id]);
-    if(wxKeywordSeen.has(key)||wxKeywordQuota>=60||sdk.getStatus().buffered>=499)continue;
-    if(sdk.emit('chat.keyword_candidate','network',{content:text,content_truncated:false,message_type:1,
-      decoder:'wechat.msg_list.keyword.v1',keyword_live:true,observed_at_ms:Date.now(),
-      confidence:'candidate',live_eligible:false,room_verified:false},{native_event_id:id,user_id:user})){
-      wxKeywordSeen.add(key);wxKeywordQuota++;
-      if(wxKeywordSeen.size>2048)wxKeywordSeen.delete(wxKeywordSeen.values().next().value);
-    }
   }
 };
-sdk.onDispose(()=>{wxKeywordSeen.clear();wxActivitySeen.clear();});
+sdk.onDispose(()=>{wxActivitySeen.clear();});
 const wxObservePollChats=(values,started,knownPoll)=>{
-  if(!BOOT.automatic_send)return;
+  if(!BOOT.automatic_send&&!BOOT.unified_ui)return;
   let visited=0,decoded=0;
   const walk=(value,depth=0,poll=knownPoll)=>{
     if(depth>9||++visited>1500)return;
@@ -1075,6 +1081,8 @@ sdk.onDispose(() => {
 
 // Recording's existing WXE bus is optional; no recording controls are injected here.
 const wxRoomBinding=createWechatRoomBinding(wxReadLiveIdentity,wxStopTaskForRoomChange,BOOT.unified_ui===true);
+const wxPkDiagnostics=createWechatPkDiagnostics(sdk,()=>!sdk.getStatus().stopped);
+if(BOOT.raw_messages)sdk.emit('probe.status','diagnostic',{stage:'wechat_pk_diagnostics_ready'});
 let wxBus = null; const wxBusListeners = [];
 const wxAttachBus = () => {
   wxStatus.hook_replaced = window.fetch !== wxFetchHook || window.WebSocket !== wxSocketHook || XMLHttpRequest.prototype.open !== wxOpenHook;
@@ -1084,6 +1092,8 @@ const wxAttachBus = () => {
   const bus = window.WXE;
   if (!bus || typeof bus.on !== 'function' || typeof bus.off !== 'function') return;
   wxBus = bus;
+  const pkHooks=wxPkDiagnostics.attach(bus);
+  if(BOOT.raw_messages)sdk.emit('probe.status','diagnostic',{stage:pkHooks?'wechat_pk_bus_hooked':'wechat_pk_bus_no_emitter'});
   for (const name of ['channels:OnLiveProfileLoaded', 'channels:JoinLive']) {
     const handler = value => { try { if(name==='channels:JoinLive')wxRoomBinding.join();else wxRoomBinding.profile(); if (wxCollecting) sdk.captureRaw?.('event_bus','live_profile',value); wxShape('event_bus', value); } catch (_) {} };
     bus.on(name, handler); wxBusListeners.push([name, handler]);
@@ -1095,6 +1105,7 @@ const wxBusTimer = setInterval(wxAttachBus, 1000);
 sdk.onDispose(() => {
   clearInterval(wxBusTimer);
   for (const [name, handler] of wxBusListeners) wxBus.off(name, handler);
+  wxPkDiagnostics.dispose();
 });
 wxPublish();
 sdk.emit('probe.status', 'diagnostic', { stage: 'wechat_desktop_probe_ready' });

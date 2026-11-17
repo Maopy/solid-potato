@@ -229,6 +229,10 @@ fn base64_encode(input: &[u8]) -> String {
 }
 
 pub fn render_addon(config: &MitmproxySidecarConfig) -> String {
+    render_addon_with_ui(config, false)
+}
+
+pub fn render_addon_with_ui(config: &MitmproxySidecarConfig, unified_ui: bool) -> String {
     let endpoint = config.capture_endpoint.as_str();
     let token = config.permit.as_bearer();
     // Keep this separate from the loopback permit: it is a harmless, unique
@@ -244,8 +248,11 @@ pub fn render_addon(config: &MitmproxySidecarConfig) -> String {
             .expect("serializing embedded upstream frontend assets")
             .as_bytes(),
     );
-    let injected_tags =
-        wechat_inject::html_tags(&config.channels_ws_url, &config.downloader_ws_url);
+    let injected_tags = wechat_inject::html_tags_with_ui(
+        &config.channels_ws_url,
+        &config.downloader_ws_url,
+        unified_ui,
+    );
     let live_page_tag = wechat_inject::live_page_tag();
     let recorder_adapter = r#"(() => {
   const endpoint = "/__live_archive/capture";
@@ -314,6 +321,7 @@ pub fn render_addon(config: &MitmproxySidecarConfig) -> String {
     return true;
   };
   const install = () => {
+    if (window.__d_config?.unifiedUI) return;
     // `channels.live.js` is preserved verbatim. On newer desktop bundles its
     // initial event can occasionally precede that script's listener, which
     // leaves the reference icon visible but without its `onclick` setup. Add
@@ -481,7 +489,7 @@ PAGE_CAPTURE_SCRIPT = r'''/* live-archive-response-observer */
     window.WebSocket = ObservedWebSocket;
   }}
   const mountButton = () => {{
-    if (window.__liveArchiveModerationV1) return;
+    if (window.__d_config?.unifiedUI || window.__liveArchiveModerationV1) return;
     if (document.getElementById("live-archive-download-button")) return;
     const button = document.createElement("button");
     button.id = "live-archive-download-button";

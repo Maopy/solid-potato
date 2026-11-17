@@ -62,7 +62,7 @@ impl Dashboard {
         let auth = token.clone();
         let task = tokio::spawn(async move {
             loop {
-                tokio::select! {_=stopped.changed()=>break,accepted=listener.accept()=>{let Ok((socket,_))=accepted else{break;};let rooms=rooms.clone();let auth=auth.clone();let recordings=recordings.clone();let hub=hub.clone();let install_url=install_url.clone();tokio::spawn(async move{let _=tokio::time::timeout(std::time::Duration::from_secs(3),handle(socket,address,&auth,&rooms,recordings,hub,install_url)).await;});}}
+                tokio::select! {_=stopped.changed()=>break,accepted=listener.accept()=>{let Ok((socket,_))=accepted else{break;};let rooms=rooms.clone();let auth=auth.clone();let recordings=recordings.clone();let hub=hub.clone();let install_url=install_url.clone();tokio::spawn(async move{let _=tokio::time::timeout(std::time::Duration::from_secs(35),handle(socket,address,&auth,&rooms,recordings,hub,install_url)).await;});}}
             }
         });
         Ok(Self {
@@ -134,7 +134,7 @@ async fn handle(
     {
         return respond(&mut socket, 403, "application/json", b"{}").await;
     }
-    if method == "GET" && path == "/" {
+    if method == "GET" && (path == "/" || path.starts_with("/?")) {
         return respond(
             &mut socket,
             200,
@@ -164,25 +164,55 @@ async fn handle(
     }
     let result:Result<Value>=async {
         if method=="GET"&&path=="/api/state" {
-            let mut rows:Vec<_>=rooms.iter().map(|r|json!({"id":r.id,"label":r.label,"url":r.url,"platform":r.platform,"control":r.bridge.lock().ok().map(|b|b.control_status())})).collect();
+            let mut rows:Vec<_>=rooms.iter().flat_map(|r| { let bridge=r.bridge.lock().ok(); if r.platform=="wechat_channels" { if let Some(b)=bridge.as_ref() { let active=b.dashboard_rooms(&r.id,&r.label,&r.url); if !active.is_empty(){return active;} } } let name=bridge.as_ref().and_then(|b|b.anchor_name()); vec![json!({"id":r.id,"label":name.unwrap_or(&r.label),"anchor_name":name,"url":r.url,"platform":r.platform,"control":bridge.as_ref().map(|b|b.control_status())})] }).collect();
             if let Some(hub)=&hub {rows.extend(hub.rows());}
             return Ok(json!({"rooms":rows,"userscript_install_url":install_url,"downloads":if let Some(t)=&recordings{t.list().await}else{vec![]}}));
         }
+        if method=="GET"&&path=="/api/deepseek-key" { return super::deepseek::key_status(); }
         if method!="POST"||headers.get("content-type").map(String::as_str)!=Some("application/json"){bail!("invalid action");}
         let body:Value=serde_json::from_slice(&data[end+4..])?;
+        if path=="/api/deepseek-key" {
+            return match body["action"].as_str() {
+                Some("save") => super::deepseek::save_key(body["key"].as_str().context("请输入 API Key")?),
+                Some("delete") => super::deepseek::delete_key(),
+                _ => bail!("invalid action"),
+            };
+        }
         let id=body["id"].as_str().context("id required")?;
+        if path=="/api/deepseek-reply" {
+            let room_exists=rooms.iter().any(|r|r.id==id || r.bridge.lock().ok().and_then(|b|b.dashboard_connection(&r.id,id)).is_some()) || hub.as_ref().is_some_and(|h|h.rows().iter().any(|r|r["id"]==id));
+            if !room_exists { bail!("unknown room"); }
+            return super::deepseek::suggest(&body).await;
+        }
         if path=="/api/download" {
             let tasks=recordings.as_ref().context("recording unavailable")?;
             let task=match body["action"].as_str(){Some("pause")=>tasks.pause(id).await,Some("start")=>tasks.start(id).await,Some("delete")=>tasks.delete(id).await,_=>None};
             return Ok(json!({"task":task.context("unknown recording task or action")?}));
         }
+        for room in rooms.iter().filter(|r|r.platform=="wechat_channels") {
+            let mut bridge=room.bridge.lock().map_err(|_|anyhow::anyhow!("bridge unavailable"))?;
+            if let Some(connection)=bridge.dashboard_connection(&room.id,id) {
+                return match path.as_str(){
+                    "/api/moderation"=>bridge.dashboard_set_enabled(&connection,body["enabled"].as_bool().context("enabled required")?),
+                    "/api/timeline"=>bridge.dashboard_timeline(&connection),
+                    "/api/reply-suggestions"=>bridge.dashboard_replies(&connection,body["entry_id"].as_str().context("entry_id required")?),
+                    "/api/speech"=>bridge.dashboard_speech(&connection,body["enabled"].as_bool().context("enabled required")?),
+                    "/api/record"=>bridge.dashboard_record(&connection),
+                    "/api/send-message"=>bridge.dashboard_send(Some(&connection),body["text"].as_str().context("text required")?),
+                    "/api/room-settings"=>bridge.dashboard_settings(&connection),
+                    "/api/room-rules"=>{let identity=bridge.dashboard_identity(&connection).context("直播间身份尚未识别")?;if body["room_id"].as_str()!=Some(identity.as_str()){bail!("直播间身份不匹配");}bridge.patch_room_rules(&identity,serde_json::from_value(body["rules"].clone())?,body["revision"].as_str())},
+                    _=>bail!("unknown action")
+                };
+            }
+        }
         if !rooms.iter().any(|r|r.id==id) {
             let hub=hub.as_ref().context("unknown room")?;
-            return match path.as_str() {"/api/moderation"=>hub.action(id,Some(body["enabled"].as_bool().context("enabled required")?)),"/api/record"=>hub.action(id,None),_=>bail!("unknown action")};
+            return match path.as_str() {"/api/moderation"=>hub.action(id,Some(body["enabled"].as_bool().context("enabled required")?)),"/api/record"=>hub.action(id,None),"/api/send-message"=>hub.send_message(id,body["text"].as_str().context("text required")?),"/api/timeline"=>hub.timeline(id),"/api/room-settings"=>hub.room_settings(id),"/api/room-rules"=>hub.patch_room_rules(id,body["room_id"].as_str().context("room_id required")?,serde_json::from_value(body["rules"].clone())?,body["revision"].as_str()),"/api/reply-suggestions"=>hub.request_replies(id,body["entry_id"].as_str().context("entry_id required")?),"/api/speech"=>hub.speech_action(id,body["enabled"].as_bool().context("enabled required")?),_=>bail!("unknown action")};
         }
         let room=rooms.iter().find(|r|r.id==id).context("unknown room")?;
         let mut bridge=room.bridge.lock().map_err(|_|anyhow::anyhow!("bridge unavailable"))?;
-        match path.as_str(){"/api/moderation"=>bridge.set_moderation_enabled(body["enabled"].as_bool().context("enabled required")?),"/api/record"=>bridge.request_recording(),_=>bail!("unknown action")}
+        if room.platform=="wechat_channels" && !bridge.dashboard_rooms(&room.id,&room.label,&room.url).is_empty() { bail!("请选择具体直播间"); }
+        match path.as_str(){"/api/moderation"=>bridge.set_moderation_enabled(body["enabled"].as_bool().context("enabled required")?),"/api/record"=>bridge.request_recording(),"/api/send-message"=>bridge.dashboard_send(None,body["text"].as_str().context("text required")?),"/api/timeline"=>Ok(bridge.timeline()),"/api/room-settings"=>Ok(bridge.room_settings()),"/api/room-rules"=>bridge.patch_room_rules(body["room_id"].as_str().context("room_id required")?,serde_json::from_value(body["rules"].clone())?,body["revision"].as_str()),"/api/reply-suggestions"=>bridge.request_replies(body["entry_id"].as_str().context("entry_id required")?),"/api/speech"=>bridge.request_speech(body["enabled"].as_bool().context("enabled required")?),_=>bail!("unknown action")}
     }.await;
     let (status, value) = match result {
         Ok(value) => (200, value),

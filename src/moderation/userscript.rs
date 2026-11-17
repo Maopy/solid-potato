@@ -47,6 +47,7 @@ struct Template {
     id: String,
     options: ProbeOptions,
     budget: Arc<Mutex<AccountBudget>>,
+    config_path: Option<PathBuf>,
 }
 pub struct Room {
     pub id: String,
@@ -58,6 +59,13 @@ struct State {
     directory: PathBuf,
     recording: bool,
     stopping: bool,
+}
+// Bind all scoped requests to the transport's already-selected room. Preserve
+// explicit values so a conflicting or malformed page URL is rejected.
+fn bind_page_url(value: &mut Value, page: &str) {
+    if let Some(scope) = value.as_object_mut() {
+        scope.entry("page_url").or_insert_with(|| json!(page));
+    }
 }
 #[derive(Clone)]
 pub struct UserscriptHub(Arc<Mutex<State>>);
@@ -87,7 +95,20 @@ impl UserscriptHub {
             id: id.into(),
             options,
             budget,
+            config_path: None,
         });
+        Ok(())
+    }
+    pub fn set_template_config_path(&self, path: PathBuf) -> Result<()> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("userscript state unavailable"))?;
+        state
+            .templates
+            .first_mut()
+            .context("no Douyin template configured")?
+            .config_path = Some(path);
         Ok(())
     }
     pub fn bootstrap(&self, page: &str) -> Result<Value> {
@@ -101,6 +122,17 @@ impl UserscriptHub {
             if s.rooms.len() >= 32 {
                 bail!("最多管理 32 个抖音直播间，请重启场控后重新连接");
             }
+            if let Some(template) = s.templates.first_mut() {
+                if let Some(path) = &template.config_path {
+                    let current = super::room_profiles::load_synchronized(path)?;
+                    let options = current.probe_options();
+                    template.options.rules_config = options.rules_config;
+                    template.options.timed_messages = options.timed_messages;
+                    template.options.keyword_replies = options.keyword_replies;
+                    template.options.likes = options.likes;
+                    template.options.room_profiles = options.room_profiles;
+                }
+            }
             let t = s
                 .templates
                 .first()
@@ -112,8 +144,21 @@ impl UserscriptHub {
                 scope,
                 ProbeJournal::open(&dir.join("moderation-probe.sqlite3"))?,
             );
-            let selected = t.options.room_profiles.get(&key).map(|p|p.apply(&t.options));
-            configure_bridge(&mut b, &id, selected.as_ref().unwrap_or(&t.options), t.budget.clone(), s.recording)?;
+            if let Some(path) = &t.config_path {
+                b.set_config_path(path.clone());
+            }
+            let selected = t
+                .options
+                .room_profiles
+                .get(&key)
+                .map(|p| p.apply(&t.options));
+            configure_bridge(
+                &mut b,
+                &id,
+                selected.as_ref().unwrap_or(&t.options),
+                t.budget.clone(),
+                s.recording,
+            )?;
             s.rooms.insert(
                 key.clone(),
                 Arc::new(Room {
@@ -138,7 +183,7 @@ impl UserscriptHub {
     }
     pub fn rows(&self) -> Vec<Value> {
         let s = self.0.lock().unwrap();
-        s.rooms.values().map(|r| { let b = r.bridge.lock().unwrap(); json!({"id":r.id,"label":format!("直播间 {}",b.scope.room_key),"url":b.scope.room_url,"platform":"douyin","transport":"userscript","control":b.control_status()}) }).collect()
+        s.rooms.values().map(|r| { let b = r.bridge.lock().unwrap(); json!({"id":r.id,"label":b.anchor_name().unwrap_or("等待主播昵称"),"anchor_name":b.anchor_name(),"url":b.scope.room_url,"platform":"douyin","transport":"userscript","control":b.control_status()}) }).collect()
     }
     pub fn action(&self, id: &str, enabled: Option<bool>) -> Result<Value> {
         let room = self
@@ -156,9 +201,88 @@ impl UserscriptHub {
             None => b.request_recording(),
         }
     }
-    pub fn dispatch(&self, page: &str, endpoint: &str, bearer: &str, body: Value) -> Result<Value> {
+    fn dashboard_room(&self, id: &str) -> Result<Arc<Room>> {
+        self.0
+            .lock()
+            .unwrap()
+            .rooms
+            .values()
+            .find(|r| r.id == id)
+            .cloned()
+            .context("unknown room")
+    }
+    pub fn timeline(&self, id: &str) -> Result<Value> {
+        Ok(self.dashboard_room(id)?.bridge.lock().unwrap().timeline())
+    }
+    pub fn room_settings(&self, id: &str) -> Result<Value> {
+        Ok(self
+            .dashboard_room(id)?
+            .bridge
+            .lock()
+            .unwrap()
+            .room_settings())
+    }
+    pub fn patch_room_rules(
+        &self,
+        id: &str,
+        room: &str,
+        patch: super::bridge::RoomRulesPatch,
+        revision: Option<&str>,
+    ) -> Result<Value> {
+        let target = self.dashboard_room(id)?;
+        let result = target
+            .bridge
+            .lock()
+            .unwrap()
+            .patch_room_rules(room, patch, revision)?;
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("userscript state unavailable"))?;
+        if let Some(template) = state.templates.first_mut() {
+            if let Some(path) = &template.config_path {
+                template.options.room_profiles =
+                    super::room_profiles::load_synchronized(path)?.resolved_room_profiles;
+            }
+        }
+        Ok(result)
+    }
+    pub fn request_replies(&self, id: &str, entry: &str) -> Result<Value> {
+        self.dashboard_room(id)?
+            .bridge
+            .lock()
+            .unwrap()
+            .request_replies(entry)
+    }
+    pub fn send_message(&self, id: &str, text: &str) -> Result<Value> {
+        self.dashboard_room(id)?
+            .bridge
+            .lock()
+            .unwrap()
+            .dashboard_send(None, text)
+    }
+    pub fn speech_action(&self, id: &str, enabled: bool) -> Result<Value> {
+        self.dashboard_room(id)?
+            .bridge
+            .lock()
+            .unwrap()
+            .request_speech(enabled)
+    }
+    pub fn dispatch(
+        &self,
+        page: &str,
+        endpoint: &str,
+        bearer: &str,
+        mut body: Value,
+    ) -> Result<Value> {
         let room = self.room(page)?;
         let mut b = room.bridge.lock().unwrap();
+        match endpoint {
+            "control" | "speech" => bind_page_url(&mut body["scope"], page),
+            "hello" | "likes/claim" | "likes/tick" | "poll" | "results" | "delivery"
+            | "goodbye" => bind_page_url(&mut body, page),
+            _ => {}
+        }
         if let Some(page) = body["page_url"]
             .as_str()
             .or_else(|| body["scope"]["page_url"].as_str())
@@ -172,6 +296,7 @@ impl UserscriptHub {
             "control" => b.control(bearer, body),
             "speech" => b.speech(bearer, body),
             "likes/claim" => b.claim_like_period(bearer, serde_json::from_value(body)?),
+            "likes/tick" => b.claim_like_action(bearer, serde_json::from_value(body)?),
             "events" => b.events(bearer, serde_json::from_value(body)?),
             "raw" => b.raw_messages(bearer, serde_json::from_value(body)?),
             "poll" => b.poll(bearer, serde_json::from_value(body)?),
@@ -181,9 +306,10 @@ impl UserscriptHub {
             _ => bail!("unsupported userscript endpoint"),
         }
     }
-    pub fn authorize_recording(&self, page: &str, bearer: &str, scope: Value) -> Result<()> {
+    pub fn authorize_recording(&self, page: &str, bearer: &str, mut scope: Value) -> Result<()> {
         let room = self.room(page)?;
         let mut b = room.bridge.lock().unwrap();
+        bind_page_url(&mut scope, page);
         b.authorize_scope(bearer, serde_json::from_value::<Poll>(scope)?)
     }
     pub async fn stop(&self) -> Result<()> {
@@ -290,7 +416,7 @@ impl UserscriptServer {
                                 if r.method == "GET" && r.path == path {
                                     return http::respond(&mut socket,200,"text/javascript; charset=utf-8",source.as_bytes()).await;
                                 }
-                                if r.method != "POST" || r.path != "/v1/userscript" || r.bearer != key || (!r.origin.is_empty() && r.origin != "https://live.douyin.com" && !r.origin.starts_with("moz-extension://") && !r.origin.starts_with("chrome-extension://")) {
+                                if r.method != "POST" || r.path != "/v1/userscript" || r.bearer != key || (!r.origin.is_empty() && !matches!(r.origin.as_str(), "https://live.douyin.com" | "https://www.douyin.com" | "https://douyin.com") && !r.origin.starts_with("moz-extension://") && !r.origin.starts_with("chrome-extension://")) {
                                     return http::respond(&mut socket,403,"application/json",b"{\"error\":\"userscript_auth_denied\"}").await;
                                 }
                                 let result = request(&hub, tasks, recording, &r.body).await;
@@ -441,6 +567,10 @@ pub fn render_script(base: &str, key: &str) -> String {
     include_str!("../../assets/moderation/userscript/douyin.user.js")
         .replace("__BASE_JSON__", &serde_json::to_string(base).unwrap())
         .replace("__KEY_JSON__", &serde_json::to_string(key).unwrap())
+        .replace(
+            "__CLIENT_VERSION_JSON__",
+            &serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap(),
+        )
         .replace("/*__SDK__*/", super::SDK)
         .replace("/*__RAW__*/", super::RAW_CAPTURE)
         .replace("/*__SUBMIT__*/", super::AUTO_SEND)
@@ -448,11 +578,32 @@ pub fn render_script(base: &str, key: &str) -> String {
         .replace("/*__ADAPTER__*/", super::DOUYIN_ADAPTER)
         .replace("/*__FILL__*/", super::DOUYIN_FILL)
         .replace("/*__RECORDING__*/", super::DOUYIN_RECORDING)
+        // The disconnected panel has deliberately stubbed actions. Loading the
+        // real speech/likes controllers here would overwrite those stubs and
+        // read a BOOT object that has no connected-room identity.
+        .replace(
+            "/*__OFFLINE_PANEL__*/",
+            include_str!("../../assets/moderation/sdk/panel.js"),
+        )
         .replace("/*__PANEL__*/", super::PANEL)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn offline_panel_keeps_disconnected_action_stubs() {
+        let script = super::render_script("http://127.0.0.1:2025", "key");
+        let section = script
+            .split("const showOfflinePanel=()=>{")
+            .nth(1)
+            .unwrap()
+            .split("offlineDispose=()=>{")
+            .next()
+            .unwrap();
+        assert!(!section.contains("const createLikeController="));
+        assert!(!section.contains("sdk.setSpeechEnabled=async"));
+        assert!(section.contains("setModerationEnabled:fail"));
+    }
     use super::*;
     #[tokio::test]
     async fn recording_uses_the_authenticated_page_and_rejects_cross_room_submissions() {

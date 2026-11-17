@@ -11,7 +11,7 @@ let seq = 0, session = null, stopped = false, busy = false, timer = null;
 let truncated = false, bridgeError = null;
 let decoderStatus = null, previewStatus = null, preview = [];
 let draining = false, ackedSeq = 0;
-let candidateStatus = null, candidateUpdatedAt = 0, timedStatus=null, keywordStatus=null;
+let candidateStatus = null, candidateUpdatedAt = 0, timedStatus=null, keywordStatus=null, manualPending=0;
 const observedCounts = Object.create(null), generatedCounts = Object.create(null), acknowledgedCounts = Object.create(null), drainers = [];
 let moderationEnabled=BOOT.moderation_enabled!==false, moderationEpoch=BOOT.control_epoch||0;
 const moderationListeners=[],recordingRequests=new Set();
@@ -50,7 +50,13 @@ const clean = (text, limit = 512) => Array.from(String(text || "").replace(/[\u0
 const emit = (type, source, payload = {}, identity = {}) => {
   if (stopped || draining || !sameRoom()) return false;
   observedCounts[type]=(observedCounts[type]||0)+1;
-  if(!moderationEnabled&&/^(?:chat\.|gift\.|member\.|level\.|fansclub\.)/.test(type))return false;
+  if(!moderationEnabled){
+    // Public text remains visible while moderation is off. Queue it as observation
+    // only, so enabling moderation before delivery cannot replay an old reply.
+    if(BOOT.unified_ui&&(type==='chat.received'||type==='chat.observed')){
+      type='chat.observed';payload={...payload,live_eligible:false};
+    }else if(type==='public.activity'||/^(?:chat\.|gift\.|member\.|level\.|fansclub\.)/.test(type))return false;
+  }
   if (pending.length >= 499) {
     if (!truncated) {
       truncated = true;
@@ -77,11 +83,30 @@ const sdk = { emit, clean, onDispose: fn => disposers.push(fn), onDrain: fn => d
   setDecoderStatus: value => { decoderStatus = value; },
   getStatus: () => ({ moderation_enabled:moderationEnabled,control_epoch:moderationEpoch,task_id:BOOT.task_id||null, mode: BOOT.automatic_send ? "fill_and_send" : BOOT.fill_preview ? "fill_only" : "observe", send_chat: BOOT.automatic_send===true, connected: !!session && !stopped, stopped, draining, buffered: pending.length, gap: truncated, bridge_error: bridgeError,
     delivery: { observed: { ...observedCounts }, generated: { ...generatedCounts }, acknowledged: { ...acknowledgedCounts }, acked_seq: ackedSeq },
-    fill: BOOT.fill_preview ? { ...fillExecutor?.getStatus(), bridge: fillStatus, pending_result: !!fillReport, last_result: lastFillResult } : null,
+    fill: BOOT.fill_preview||BOOT.manual_send ? { ...fillExecutor?.getStatus(manualPending>0), bridge: fillStatus, pending_result: !!fillReport, last_result: lastFillResult } : null,
     candidate_preview: candidateStatus ? {...candidateStatus,
       stale: stopped || !!bridgeError, pending: (candidateStatus.pending||[]).map(p=>({...p,
         remaining_ms: Math.max(0,p.remaining_ms-(performance.now()-candidateUpdatedAt))}))} : null,
     likes:sdk.likes?.getStatus()||null,timed_messages:timedStatus, keyword_replies:keywordStatus, recording:{...window.__liveArchiveRecordingController?.getStatus?.(),...recordingState,busy:recordingBusy}, raw: sdk.rawStatus?.() || null, decoder: decoderStatus, rules: previewStatus, previews: preview.map(item => ({ ...item })) }) };
+let reportedRoomName=null;
+sdk.reportRoomName=value=>{
+  if(!BOOT.unified_ui||typeof value!=='string')return;
+  const nickname=clean(value,128).replace(/[\u0080-\u009f]/g,'').trim();
+  if(!nickname||nickname===reportedRoomName)return;
+  if(emit('room.profile','diagnostic',{nickname}))reportedRoomName=nickname;
+};
+sdk.refreshRoomName=()=>{
+  if(!BOOT.unified_ui||stopped||draining||!sameRoom())return;
+  try{
+    if(BOOT.adapter_id==='wechat_channels.desktop_probe'){
+      const [error,profile]=window.WXU?.check_live_existing?.({silence:true})||[];
+      if(error||!profile)return;
+      const identity=profile.contact?.username||profile.username||profile.id;
+      if(BOOT.room_identity&&identity!==BOOT.room_identity)return;
+      sdk.reportRoomName(profile.nickname||profile.contact?.nickname||profile.author?.nickname);
+    }else sdk.reportRoomName(window.__liveArchiveRecordingController?.getAnchorName?.());
+  }catch(_){}
+};
 sdk.onModerationChange=fn=>{moderationListeners.push(fn);if(BOOT.unified_ui)fn(moderationEnabled);};
 sdk.setModerationEnabled=async enabled=>{
   if(!session||stopped||draining)throw Error('直播页尚未连接');
@@ -90,9 +115,13 @@ sdk.setModerationEnabled=async enabled=>{
   const state=await post('control',{scope:{v:1,connection_id:session.connection_id,binding_id:session.binding_id,page_url:BOOT.room_url},enabled},session.token);
   applyModeration(state);return state;
 };
-sdk.claimLikePeriod=async()=>{
+sdk.claimLikePeriod=async initial=>{
   if(!session||stopped||!BOOT.like_period_ledger)throw Error('请连接支持点赞时段记录的新版后台');
-  return post('likes/claim',{v:1,connection_id:session.connection_id,binding_id:session.binding_id,page_url:BOOT.room_url},session.token);
+  return post('likes/claim',{v:1,connection_id:session.connection_id,binding_id:session.binding_id,page_url:BOOT.room_url,initial:initial===true},session.token);
+};
+sdk.claimLikeAction=async()=>{
+  if(!session||stopped||!BOOT.like_period_ledger)throw Error('请连接支持点赞控制的新版后台');
+  return post('likes/tick',{v:1,connection_id:session.connection_id,binding_id:session.binding_id,page_url:BOOT.room_url},session.token);
 };
 const recordingApi=async(action,body)=>{
   if(typeof userscriptRecordingTransport==='function')return userscriptRecordingTransport(action,body);
@@ -156,7 +185,8 @@ const flushFillReport = async () => {
   fillReport = null;
 };
 const applyFillCommand = async (command, pollElapsed, blocked=false) => {
-  const valid = command?.v === 1 && command.command === (BOOT.automatic_send ? "fill_and_submit" : "fill_input") &&
+  const manual=BOOT.manual_send===true&&typeof command?.action_id==='string'&&command.action_id.startsWith('manual-');
+  const valid = command?.v === 1 && command.command === (BOOT.automatic_send||manual ? "fill_and_submit" : "fill_input") &&
     command.connection_id === session.connection_id && command.binding_id === session.binding_id &&
     command.document_id === documentId && command.page_url === BOOT.room_url &&
     typeof command.action_id === "string" && /^[a-zA-Z0-9._:-]{1,128}$/.test(command.action_id);
@@ -173,7 +203,7 @@ const applyFillCommand = async (command, pollElapsed, blocked=false) => {
     if (valid && fillCache.size <= 1000 && fillCache.has(command.action_id)) fillCache.set(command.action_id, result);
     window.console?.info?.("[Live Archive fill]", result.outcome, result.reason);
   }
-  lastFillResult = { action_id: command.action_id, ...result, send_chat: BOOT.automatic_send===true };
+  lastFillResult = { action_id: command.action_id, ...result, send_chat: BOOT.automatic_send===true||manual };
   fillReport = { v: 1, connection_id: session.connection_id, binding_id: session.binding_id,
     page_url: BOOT.room_url, action_id: command.action_id, ...result };
   // Retry only this receipt after an HTTP failure, never the input write.
@@ -185,15 +215,16 @@ const tick = async () => {
   busy = true;
   try {
     if (!session) {
-      session = await post("hello", { v: 1, ticket: BOOT.ticket, page_url: BOOT.room_url, document_id: documentId, adapter_id: BOOT.adapter_id || "douyin.live_page", ...(tabClientId?{client_id:tabClientId}:{}) });
+      session = await post("hello", { v: 1, ticket: BOOT.ticket, page_url: BOOT.room_url, document_id: documentId, adapter_id: BOOT.adapter_id || "douyin.live_page", ...(typeof userscriptClientVersion==='string'?{client_version:userscriptClientVersion}:{}), ...(tabClientId?{client_id:tabClientId}:{}) });
       if (stopped) {
         void post("goodbye", { v: 1, connection_id: session.connection_id, binding_id: session.binding_id, page_url: BOOT.room_url }, session.token).catch(() => {});
         return;
       }
     }
     const scope = { v: 1, connection_id: session.connection_id, binding_id: session.binding_id };
-    if (BOOT.fill_preview) await flushFillReport();
+    if (BOOT.fill_preview||BOOT.manual_send) await flushFillReport();
     if (stopped || !sameRoom()) { dispose(); return; }
+    sdk.refreshRoomName();
     const batch = pending.slice(0, 50);
     if (batch.length) {
       const result = await post("events", { ...scope, first_seq: batch[0].seq, events: batch }, session.token);
@@ -205,10 +236,10 @@ const tick = async () => {
       while (pending.length && pending[0].seq <= result.acked_seq) pending.shift();
       if (stopped) return;
     }
-    if (BOOT.automatic_send || BOOT.input_open_test) await fillExecutor?.prepareInput?.(fillStatus?.pending || (timedStatus?.active&&timedStatus.remaining_ms<=3000?1:0));
+    if (BOOT.automatic_send || BOOT.input_open_test || manualPending>0) await fillExecutor?.prepareInput?.(manualPending || fillStatus?.pending || (timedStatus?.active&&timedStatus.remaining_ms<=3000?1:0),manualPending>0);
     if (stopped || !sameRoom()) { dispose(); return; }
-    const pollStarted = BOOT.fill_preview ? performance.now() : 0;
-    const inputState=fillExecutor?.getStatus();
+    const pollStarted = BOOT.fill_preview||BOOT.manual_send ? performance.now() : 0;
+    const inputState=fillExecutor?.getStatus(manualPending>0);
     if(BOOT.wait_for_input && inputState?.input_reason!==lastInputWait){lastInputWait=inputState?.input_reason;sdk.emit('probe.status','diagnostic',{stage:'input_wait_changed',reason:lastInputWait||'input_ready'});}
     const result = await post("poll", { ...scope, page_url: BOOT.room_url, ...(BOOT.wait_for_input ? {input_ready:inputState?.input_ready===true}: {}) }, session.token);
     if (stopped || !sameRoom()) { dispose(); return; }
@@ -229,13 +260,16 @@ const tick = async () => {
       try{await sdk.startRecording();sdk.emit('recording.result','diagnostic',{request_id:result.recording_request,state:'submitted',message:'已提交录制，请在下载任务中查看'});}
       catch(error){sdk.emit('recording.result','diagnostic',{request_id:result.recording_request,state:'failed',message:sdk.clean(error.message,160)});}
     }
+    if(result.speech_request&&sdk.applySpeechRequest)await sdk.applySpeechRequest(result.speech_request);
     timedStatus=result.timed_messages||null;
+    sdk.applyLikesConfig?.(result.likes_config);
     keywordStatus=result.keyword_replies||null;
     candidateStatus = result.candidate_preview || null;
     candidateUpdatedAt = performance.now();
     const wasPaused = previewStatus?.paused;
     previewStatus = result.rules || null;
     fillStatus = result.fill || null;
+    manualPending=Number.isSafeInteger(result.manual_pending)?result.manual_pending:0;
     if (previewStatus?.paused && !wasPaused) window.console?.warn?.("[Live Archive paused]", previewStatus.last_reason);
     for (const item of result.previews || []) {
       preview.push(item); if (preview.length > 10) preview.shift();
@@ -244,9 +278,9 @@ const tick = async () => {
       if (previewStatus?.mode === "online_scheduler_preview" && (item.kind === "cancelled" || item.kind === "expired")) window.console?.info?.("[Live Archive queue]", item.kind, item.reason);
       if (item.kind === "skipped") window.console?.warn?.("[Live Archive skipped gift]", item.reason);
     }
-    if (BOOT.fill_preview && result.mode === (BOOT.automatic_send ? "fill_and_send" : "fill_only") && result.send_chat === (BOOT.automatic_send===true)) {
+    if ((BOOT.fill_preview||BOOT.manual_send) && result.mode === (BOOT.automatic_send ? "fill_and_send" : BOOT.fill_preview?"fill_only":"observe") && result.send_chat === (BOOT.automatic_send===true)) {
       if (!Array.isArray(result.commands) || result.commands.length > 1) throw new Error("invalid_fill_command_batch");
-      if (result.commands.length) await applyFillCommand(result.commands[0], performance.now() - pollStarted, !moderationEnabled||staleControl);
+      if (result.commands.length) { const manual=BOOT.manual_send===true&&result.commands[0]?.action_id?.startsWith('manual-'); await applyFillCommand(result.commands[0], performance.now() - pollStarted, (!manual&&!moderationEnabled)||staleControl); }
     }
     bridgeError = null;
     if (stopped) return;
@@ -256,6 +290,11 @@ const tick = async () => {
     // 30s on older backends; keep pairing with the same scoped ticket, without
     // issuing commands or treating this temporary handover as a stopped page.
     if(!session && typeof userscriptTransport==='function' && error.status===422 && error.message==='pairing denied' && performance.now()-pairingStarted<45000){bridgeError=null;timer=setTimeout(tick,1000);return;}
+    // A suspended tab can outlive the server's session. Reload only for this
+    // precise expiry: a fresh document obtains a new ticket and room metadata.
+    if(session && typeof userscriptTransport==='function' && error.status===422 && error.message==='unknown connection'){
+      dispose(); window.location.reload(); return;
+    }
     // Keep unacknowledged IDs stable. Expired sessions require a page reload
     // and a new ticket; never silently rebind buffered events to another room.
     bridgeError = error.message;

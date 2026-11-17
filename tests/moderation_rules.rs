@@ -81,6 +81,18 @@ fn level(id: &str, kind: &str, n: u32, snapshot: bool) -> CoreEvent {
 }
 
 #[test]
+fn nickname_mapping_applies_to_join_and_upgrade_messages() {
+    let mut config = RulesConfig::default();
+    config.gift_nicknames.insert("甲".into(), "小甲".into());
+    let mut core = Engine::new(config.clone()).unwrap();
+    let joined = plans(&core.ingest(0, event("join", "甲", EventKind::FansclubJoined)).unwrap());
+    assert_eq!(joined[0].text, "欢迎小甲加入粉丝团");
+    let mut core = Engine::new(config).unwrap();
+    let upgraded = plans(&core.ingest(0, level("upgrade", "wealth", 2, false)).unwrap());
+    assert_eq!(upgraded[0].text, "恭喜小甲的等级升级到2级");
+}
+
+#[test]
 fn identical_names_keep_exact_totals_across_large_distinct_gift_ids() {
     let mut core = engine();
     let mut second = gift("large-2", "甲", "玫瑰", u64::MAX);

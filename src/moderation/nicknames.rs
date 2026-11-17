@@ -1,4 +1,4 @@
-//! Local gift-thanks aliases, resolved before proxy/storage startup.
+//! Local display aliases, resolved before proxy/storage startup.
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::{

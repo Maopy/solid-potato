@@ -39,9 +39,11 @@ pub(crate) fn render(
 pub(crate) struct CandidateWelcomes {
     enabled: bool,
     supporter_enabled: bool,
+    supporter_min_fansclub_level: Option<u32>,
     supporter_template: Template,
     supporter_cooldown: HashMap<String, u64>,
     template: Template,
+    nicknames: super::nicknames::Nicknames,
     limit: usize,
     due: Option<u64>,
     users: Vec<(String, String)>,
@@ -53,12 +55,14 @@ impl CandidateWelcomes {
         Ok(Self {
             enabled: config.welcome_enabled,
             supporter_enabled: config.supporter_welcome_enabled,
+            supporter_min_fansclub_level: config.supporter_min_fansclub_level,
             supporter_template: Template::parse(
                 &config.supporter_welcome_template,
                 &["nickname", "title"],
             )?,
             supporter_cooldown: HashMap::new(),
             template: Template::parse(&config.welcome_template, &["nickname"])?,
+            nicknames: config.gift_nicknames.clone(),
             limit: config.max_text_chars.min(80),
             due: None,
             users: vec![],
@@ -68,6 +72,17 @@ impl CandidateWelcomes {
     }
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+    pub fn update_rules(&mut self, config: &RulesConfig) -> Result<()> {
+        let next = Self::new(config)?;
+        self.enabled = next.enabled;
+        self.supporter_enabled = next.supporter_enabled;
+        self.supporter_min_fansclub_level = next.supporter_min_fansclub_level;
+        self.supporter_template = next.supporter_template;
+        self.template = next.template;
+        self.nicknames = next.nicknames;
+        self.limit = next.limit;
+        Ok(())
     }
     pub fn remaining_ms(&self, now: u64) -> Option<u64> {
         self.due.map(|due| due.saturating_sub(now))
@@ -120,12 +135,22 @@ impl CandidateWelcomes {
         {
             return logs;
         }
+        let name = self.nicknames.get(user).map(String::as_str).unwrap_or(name).to_owned();
         if self.supporter_enabled {
-            if let Some(title) = event
+            let title = event
                 .payload
                 .get("supporter_title")
                 .and_then(|value| serde_json::from_value::<SupporterTitle>(value.clone()).ok())
-            {
+                .map(|title| (title.label().to_owned(), json!(title)))
+                .or_else(|| {
+                    self.supporter_min_fansclub_level.and_then(|min| {
+                        event.payload["fan_level"]
+                            .as_u64()
+                            .filter(|level| *level >= u64::from(min) && *level <= 100000)
+                            .map(|_| ("粉丝团".to_owned(), json!("fansclub")))
+                    })
+                });
+            if let Some((title, title_kind)) = title {
                 self.remove(user);
                 self.supporter_cooldown
                     .retain(|_, at| now.saturating_sub(*at) < 60_000);
@@ -137,13 +162,13 @@ impl CandidateWelcomes {
                 let text = self
                     .supporter_template
                     .render(&HashMap::from([
-                        ("nickname", clean_text(name, 12)),
-                        ("title", title.label().into()),
+                        ("nickname", clean_text(&name, 12)),
+                        ("title", title.clone()),
                     ]))
                     .expect("validated supporter template");
                 if text.chars().count() > self.limit {
                     logs.push(json!({"kind":"welcome_candidate_skipped","at_ms":now,"reason":"text_too_long",
-                        "supporter_title":title,"user_id":user,"send_chat":false,"fill_input":false}));
+                        "supporter_title":title_kind,"user_id":user,"send_chat":false,"fill_input":false}));
                     return logs;
                 }
                 self.supporter_cooldown.insert(user.into(), now);
@@ -154,7 +179,7 @@ impl CandidateWelcomes {
                 }
                 logs.push(json!({"kind":"welcome_candidate_draft","at_ms":now,"due_at_ms":now,
                     "expires_at_ms":now.saturating_add(10_000),"text":text,"user_id":user,"user_count":1,
-                    "supporter_title":title,"reason":"supporter_arrival","confidence":"candidate",
+                    "supporter_title":title_kind,"reason":"supporter_arrival","confidence":"candidate",
                     "live_eligible":false,"room_verified":false,"send_chat":false,"fill_input":false,
                     "source_messages":[{"seq":event.seq,"event_id":event.event_id,"native_event_id":id}]}));
                 return logs;

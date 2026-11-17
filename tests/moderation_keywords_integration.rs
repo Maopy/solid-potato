@@ -70,6 +70,7 @@ async fn setup(dir: &std::path::Path) -> (ProbeServer, Client) {
         ProbeScope::from_room_url(cfg.room.url.clone()).unwrap(),
         ProbeJournal::open(&dir.join("journal.sqlite3")).unwrap(),
     );
+    b.set_config_path(path.clone());
     b.configure(cfg.rules_config(), cfg.scheduler.clone())
         .unwrap();
     b.configure_candidate_preview(cfg.candidate_preview)
@@ -77,7 +78,9 @@ async fn setup(dir: &std::path::Path) -> (ProbeServer, Client) {
     b.enable_candidate_fill_preview(None).unwrap();
     b.enable_automatic_send().unwrap();
     b.configure_keywords(cfg.keyword_replies).unwrap();
-    let script = b.bootstrap(&b.relay_token.clone()).unwrap();
+    let script = b
+        .bootstrap_for_room(&b.relay_token.clone(), Some("host"))
+        .unwrap();
     let boot: Value = serde_json::from_str(
         script
             .split("const BOOT = ")
@@ -101,6 +104,105 @@ async fn setup(dir: &std::path::Path) -> (ProbeServer, Client) {
 
 fn chat(id: &str, text: &str) -> Value {
     json!({"event_type":"chat.keyword_candidate","source_kind":"network","user_id":"viewer","native_event_id":id,"payload":{"content":text,"decoder":"wechat.msg_list.keyword.v1","keyword_live":true,"message_type":1,"observed_at_ms":chrono::Utc::now().timestamp_millis()}})
+}
+#[tokio::test]
+async fn room_message_settings_update_existing_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, mut c) = setup(dir.path()).await;
+    c.active(true).await;
+    let config = serde_json::from_value(
+        json!({"enabled":true,"rules":[{"keywords":["价格"],"reply":"请看介绍"}]}),
+    )
+    .unwrap();
+    let timed = Default::default();
+    assert_eq!(
+        server
+            .bridge
+            .lock()
+            .unwrap()
+            .update_room_messages("host", timed, config)
+            .unwrap(),
+        1
+    );
+    c.events(vec![chat("old", "胎记")]).await;
+    assert_eq!(c.poll(true).await["commands"], json!([]));
+    let mut fresh = chat("new", "价格多少");
+    fresh["event_type"] = json!("chat.activity");
+    fresh["payload"]["decoder"] = json!("wechat.msg_list.activity.v1");
+    c.events(vec![fresh]).await;
+    assert_eq!(c.poll(true).await["commands"][0]["text"], "请看介绍");
+    server.stop().await.unwrap();
+}
+#[tokio::test]
+async fn message_settings_save_and_reload_for_one_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, mut c) = setup(dir.path()).await;
+    c.active(true).await;
+    let patch = serde_json::from_value(json!({"timed_messages":{"enabled":true,"interval_seconds":20,"min_comments":0,"count_scope":"comments","messages":["欢迎大家"]},"keyword_replies":{"enabled":true,"cooldown_seconds":60,"rules":[{"keywords":["价格"],"reply":"请看介绍"}]},"likes":{"enabled":true,"mode":"continuous","interval_ms":1300}})).unwrap();
+    server
+        .bridge
+        .lock()
+        .unwrap()
+        .patch_room_rules("host", patch, None)
+        .unwrap();
+    assert_eq!(c.poll(true).await["timed_messages"]["interval_seconds"], 20);
+    assert_eq!(c.poll(true).await["likes_config"]["interval_ms"], 1300);
+    let cfg = ModerationConfig::load(&dir.path().join("room.yml")).unwrap();
+    assert_eq!(
+        cfg.resolved_room_profiles["host"].timed.messages,
+        ["欢迎大家"]
+    );
+    assert_eq!(
+        cfg.resolved_room_profiles["host"].keywords.rules[0].reply,
+        "请看介绍"
+    );
+    assert_eq!(cfg.resolved_room_profiles["host"].likes.interval_ms, 1300);
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn external_yaml_edits_apply_to_connected_room_and_invalid_edits_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, mut c) = setup(dir.path()).await;
+    c.active(true).await;
+    let path = dir.path().join("room.yml");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let changed = original
+        .replace("['胎记', '印记']", "['价格']")
+        .replace("reply: 手臂是胎记", "reply: 请看介绍");
+    assert_ne!(changed, original);
+    std::fs::write(&path, &changed).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    c.poll(true).await;
+    c.events(vec![chat("new", "价格多少")]).await;
+    let command = c.poll(true).await["commands"][0].clone();
+    assert_eq!(command["text"], "请看介绍");
+    c.receipt(&command, false).await;
+    std::fs::write(&path, "not: [valid").unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let status = c.poll(true).await;
+    assert!(
+        status["moderation_control"]["settings_error"]
+            .as_str()
+            .unwrap()
+            .contains("配置未生效")
+    );
+    std::fs::write(&path, changed).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert!(c.poll(true).await["moderation_control"]["settings_error"].is_null());
+    server.stop().await.unwrap();
+}
+#[tokio::test]
+async fn backend_matches_live_activity_without_page_keyword_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, mut c) = setup(dir.path()).await;
+    c.active(true).await;
+    let activity = |id: &str, text: &str| json!({"event_type":"chat.activity","source_kind":"network","user_id":"viewer","native_event_id":id,"payload":{"content":text,"decoder":"wechat.msg_list.activity.v1","keyword_live":true,"message_type":1,"observed_at_ms":chrono::Utc::now().timestamp_millis()}});
+    c.events(vec![activity("ordinary", "你好")]).await;
+    assert_eq!(c.poll(true).await["commands"], json!([]));
+    c.events(vec![activity("matching", "这里是胎记吗")]).await;
+    assert_eq!(c.poll(true).await["commands"][0]["text"], "手臂是胎记");
+    server.stop().await.unwrap();
 }
 #[tokio::test]
 async fn ordinary_keyword_reply_uses_queue_shared_cooldown_and_echo_filter() {
@@ -154,6 +256,14 @@ async fn switch_filters_off_events_and_never_accumulates_for_resume() {
         .await;
     c.active(true).await;
     assert_eq!(c.poll(true).await["commands"], json!([]));
+    let mut observed = chat("off-delivered-after-resume", "胎记");
+    observed["event_type"] = json!("chat.observed");
+    c.events(vec![observed]).await;
+    assert_eq!(
+        c.poll(true).await["commands"],
+        json!([]),
+        "off-period observations never become replies after resume"
+    );
     c.events(vec![chat("new", "胎记")]).await;
     let p = c.poll(true).await;
     assert_eq!(p["commands"][0]["text"], "手臂是胎记");

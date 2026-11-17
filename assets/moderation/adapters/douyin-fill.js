@@ -24,7 +24,7 @@ const createDouyinFillExecutor = context => {
   const contents = node => node.tagName === "TEXTAREA" ? node.value : node.textContent;
   const blank = node => String(contents(node) || "").replace(/[\u200b\ufeff]/g, "") === "" &&
     !node.querySelector?.('img,video,audio,[data-mention]');
-  const inspect = () => {
+  const inspect = (manual=false) => {
     if (window.top !== window.self) return { reason: "not_top_frame" };
     if (document.hidden) return { reason: "page_hidden" };
     const nodes = Array.from(document.querySelectorAll(selector)).filter(n => n.isConnected && n.ownerDocument === document && n.getClientRects().length);
@@ -34,28 +34,30 @@ const createDouyinFillExecutor = context => {
     if (style.visibility !== "visible" || style.display === "none" || style.opacity === "0" || node.closest('[hidden],[inert],[aria-hidden="true"]')) return { reason: "input_hidden" };
     if (node.disabled || node.readOnly || node.matches(':disabled') || node.closest('[aria-disabled="true"],[aria-readonly="true"]') || node.tagName !== "TEXTAREA" && !node.isContentEditable) return { reason: "input_disabled" };
     const focused=document.activeElement === node || node.contains(document.activeElement);
-    if (composing || !blank(node) || (!BOOT.automatic_send && focused) || node.querySelector?.('img,video,audio,[data-mention]')) return { reason: "input_busy" };
+    if (composing || !blank(node) || (!BOOT.automatic_send && !manual && focused) || node.querySelector?.('img,video,audio,[data-mention]')) return { reason: "input_busy" };
     return { node, reason: null };
   };
   const normalize = value => String(value || '').replace(/[\u200b\ufeff]/g, '');
   const execute = async (command, pollElapsed) => {
     const reject = reason => { lastReason = reason; return { outcome: "rejected", reason }; };
-    if (!context.active()) return reject("stopped");
+    const manual=BOOT.manual_send===true&&command.action_id?.startsWith('manual-');
+    const active=manual?context.manualActive:context.active,paused=manual?context.manualPaused:context.paused;
+    if (!active()) return reject("stopped");
     if (!context.sameRoom()) return reject("room_changed");
-    if (context.paused()) return reject("observation_paused");
-    if (command.command !== (BOOT.automatic_send ? "fill_and_submit" : "fill_input") || typeof command.text !== "string" || !command.text.trim() || /[\u0000-\u001f\u007f-\u009f]/.test(command.text)) return reject("invalid_command");
+    if (paused()) return reject("observation_paused");
+    if (command.command !== (BOOT.automatic_send||manual ? "fill_and_submit" : "fill_input") || typeof command.text !== "string" || !command.text.trim() || /[\u0000-\u001f\u007f-\u009f]/.test(command.text)) return reject("invalid_command");
     if (Array.from(command.text).length > 80) return reject("text_too_long");
     const text = command.text;
     if (!Number.isFinite(pollElapsed) || pollElapsed < 0 || !Number.isFinite(command.remaining_ttl_ms) || command.remaining_ttl_ms <= pollElapsed || command.remaining_ttl_ms > 3000) return reject("ttl_expired");
     const started = performance.now(), deadline = started + command.remaining_ttl_ms - pollElapsed;
-    const candidate = inspect();
+    const candidate = inspect(manual);
     if (candidate.reason) return reject(candidate.reason);
     const node = candidate.node;
     // Re-check after locating; writing itself has no asynchronous gap.
-    if (!context.active() || !context.sameRoom()) return reject("stopped");
-    if (context.paused()) return reject("observation_paused");
+    if (!active() || !context.sameRoom()) return reject("stopped");
+    if (paused()) return reject("observation_paused");
     if (performance.now() >= deadline) return reject("ttl_expired");
-    if (inspect().node !== node) return reject("input_changed");
+    if (inspect(manual).node !== node) return reject("input_changed");
     let wrote=false,interrupted=false,attempted=false,ownedText=null;
     const isOwned=()=>{
       const actual=normalize(contents(node)),expected=normalize(text);
@@ -101,8 +103,8 @@ const createDouyinFillExecutor = context => {
       // arbitrary edits. Submission rechecks the resulting editor contents.
       const matches = actual === expected || expected.length > 50 && actual === expected.slice(0, 50);
       if (interrupted || !node.isConnected || !matches) return reject("input_changed");
-      if (BOOT.automatic_send) {
-        const result=await submitFilledInput({...context,inputSafe:()=>!composing&&!interrupted},node,actual,deadline,contents,()=>{
+      if (BOOT.automatic_send||manual) {
+        const result=await submitFilledInput({...context,active,paused,manual,inputSafe:()=>!composing&&!interrupted},node,actual,deadline,contents,()=>{
           const container=node.closest('div[class*="webcast-chatroom___input-container"]');
           return sendCandidates(container);
         });
@@ -112,7 +114,7 @@ const createDouyinFillExecutor = context => {
       lastReason = "input_filled";
       return { outcome: "filled", reason: "input_filled" };
     } catch (_) { return reject("input_error"); }
-    finally {transaction=null;if(BOOT.automatic_send&&!interrupted)clearTemporary();}
+    finally {transaction=null;if((BOOT.automatic_send||manual)&&!interrupted)clearTemporary();}
   };
   // Include pre-click cleanup in the queue lock. TTL includes queue time;
   // old work must not acquire a fresh lifetime when the editor becomes free.
@@ -127,12 +129,13 @@ const createDouyinFillExecutor = context => {
     return task;
   };
   return { execute:enqueue,
-    getStatus: () => { const state = executing?{reason:"input_busy"}:inspect(); return { mode: BOOT.automatic_send?"fill_and_send":"fill_only", send_chat: BOOT.automatic_send===true, input_ready: !state.reason, input_reason: state.reason, last_reason: lastReason, send_button_count: state.node?sendCandidates(state.node.closest('div[class*="webcast-chatroom___input-container"]')).length:0 }; },
+    getStatus: (manual=false) => { const state = executing?{reason:"input_busy"}:inspect(manual); return { mode: BOOT.automatic_send?"fill_and_send":"fill_only", send_chat: BOOT.automatic_send===true, input_ready: !state.reason, input_reason: state.reason, last_reason: lastReason, send_button_count: state.node?sendCandidates(state.node.closest('div[class*="webcast-chatroom___input-container"]')).length:0 }; },
     dispose: () => { for(const name of editEvents)document.removeEventListener(name,userEdit,true); document.removeEventListener("compositionstart", compositionStart, true); document.removeEventListener("compositionend", compositionEnd, true); }
   };
 };
-if (BOOT.fill_preview) {
+if (BOOT.fill_preview||BOOT.manual_send) {
   fillExecutor = createDouyinFillExecutor({ active: () => !stopped && !draining && (typeof moderationEnabled==="undefined"||moderationEnabled), sameRoom,
+    manualActive:()=>!stopped&&!draining,manualPaused:()=>false,
     paused: () => truncated || !!decoderStatus?.last_error || !!previewStatus?.paused });
   sdk.onDispose(() => fillExecutor.dispose());
 }

@@ -54,7 +54,7 @@ const mountModerationPanel=()=>{
   toggle.onclick=async()=>{toggle.disabled=true;try{await sdk.setModerationEnabled(!sdk.getStatus().moderation_enabled);notice.textContent='';}catch(e){notice.textContent=e.message;}finally{render();}};
   record.onclick=async()=>{record.disabled=true;try{const state=sdk.getRecordingStatus().state;if(state==='recording')await sdk.pauseRecording();else if(state==='paused')await sdk.resumeRecording();else await sdk.startRecording();notice.textContent='';}catch(e){notice.textContent=e.message;}finally{render();}};
   like.onclick=()=>{try{sdk.likes?.setEnabled(!sdk.likes.getStatus().enabled);notice.textContent='';}catch(e){notice.textContent=e.message;}render();};
-  const render=()=>{const s=sdk.getStatus();
+  const render=()=>{const s=sdk.getStatus();likesGroup.hidden=!BOOT.likes?.enabled;likesGroup.style.display=BOOT.likes?.enabled?'inline-flex':'none';
     const state=s.stopped||s.bridge_error||s.decoder?.last_error?'异常':!s.connected?'连接中':s.moderation_enabled?'已开启':'已关闭';
     const panelIcon='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h8'+(expanded?'':'M12 11v6')+'"/></svg>';
     if(launcherLabel.innerHTML!==panelIcon)launcherLabel.innerHTML=panelIcon;
@@ -69,7 +69,7 @@ const mountModerationPanel=()=>{
     Object.assign(box.style,{padding:expanded?'12px':'0',background:expanded?'#20232b':'transparent',border:expanded?'1px solid #3b4250':'0',boxShadow:expanded?'0 8px 28px #0006':'none',maxWidth:'calc(100vw - 40px)',maxHeight:'calc(100vh - 32px)',overflowY:'auto',width:expanded?'320px':'auto',boxSizing:'border-box',colorScheme:'dark'});
     toggleDot.style.background=s.moderation_enabled?'#4ade80':'#9ca3af';
     toggle.title=s.moderation_enabled?'场控已开启，点击关闭':'场控已关闭，点击开启';toggle.setAttribute('aria-label',toggle.title);
-    toggle.setAttribute('aria-checked',String(s.moderation_enabled));toggle.disabled=!s.connected||s.stopped||s.draining;
+    toggle.setAttribute('aria-checked',String(s.moderation_enabled));toggle.disabled=(!s.connected&&!BOOT.offline)||s.stopped||s.draining;
     info.textContent=[s.stopped?'连接已停止，请刷新直播页':!s.connected?'正在连接直播页':'',s.bridge_error||'',s.fill?.bridge?.blocked?'发送未确认，已暂停后续发送':''].filter(Boolean).join('\n');
     if(BOOT.recipient_pending)info.textContent+='\n尚未识别视频号主播身份，礼物感谢暂停；直播加载完成后请刷新直播页。录屏仍可使用。';
     if(BOOT.adapter_id==='douyin.live_page'){
@@ -83,7 +83,7 @@ const mountModerationPanel=()=>{
       const voice=sdk.getSpeechStatus();
       speechDot.style.background=voice.enabled?'#4ade80':'#9ca3af';speech.setAttribute('aria-checked',String(voice.enabled));
       speech.title=voice.enabled?'语音识别已开启，点击关闭并清空文字':'语音识别已关闭，点击开启';speech.setAttribute('aria-label',speech.title);
-      speech.disabled=speechBusy||!s.connected||s.stopped||s.draining;
+      speech.disabled=speechBusy||(!s.connected&&!BOOT.offline)||s.stopped||s.draining;
       const recent=voice.recent.slice(-3);
       transcript.hidden=!voice.enabled&&!voice.error;
       transcript.textContent=(voice.error?'语音异常：'+voice.error+(recent.length?'\n':''):'')+(recent.length?recent.join('\n'):voice.enabled?(voice.state==='starting'?'准备本地模型…':'等待说话…'):'');
@@ -96,7 +96,7 @@ const mountModerationPanel=()=>{
     recordDot.title=recordingDot.title;
     if(!expanded)launcher.title+=' · '+recordingDot.title;
     recordLabel.textContent='录制';record.title=recording.error||(recordingDot.title+'，点击'+(labels[recording.state]||'开始录制'));
-    record.disabled=recording.busy||['starting','unknown'].includes(recording.state)||!s.connected||s.stopped||s.draining;
+    record.disabled=recording.busy||['starting','unknown'].includes(recording.state)||(!s.connected&&!BOOT.offline)||s.stopped||s.draining;
     record.setAttribute('aria-label',recordingDot.title+'，'+(labels[recording.state]||'开始录制'));
     if(BOOT.recording&&recording.error)info.textContent+='\n录制异常：'+recording.error;
     for(const id of ['live-archive-wechat-record-icon','live-archive-download-button','live-archive-quality','live-archive-status'])document.getElementById(id)?.remove?.();

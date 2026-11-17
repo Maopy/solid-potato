@@ -27,7 +27,7 @@ cargo run -p live-archive-core -- moderation run --config moderation.yml
 
 ## 可配置项
 
-规则包括 `gift`、`welcome`、`supporter_welcome`、`fansclub_joined`、`upgrade`；每项有 `enabled` 和 `template`。升级还有 `fansclub`、`honor`、`wealth` 三个独立开关及 `allow_inferred_levels`。默认不根据等级快照推断升级。开启某个规则不等于平台已支持该事件：当前抖音采集覆盖仍以现有解码器为准，荣誉/财富等级的可靠在线事件尚未打通。
+规则包括 `gift`、`welcome`、`supporter_welcome`、`fansclub_joined`、`upgrade`；每项有 `enabled` 和 `template`。升级还有 `fansclub`、`honor`、`wealth` 三个独立开关及 `allow_inferred_levels`。默认不根据等级快照推断升级。开启某个规则不等于平台已支持该事件：当前抖音采集覆盖仍以现有解码器为准，抖音用户消费等级的明确升级通知由 wealth 开关控制；荣誉等级事件仍未打通。
 
 模板支持的变量：
 
@@ -37,6 +37,8 @@ cargo run -p live-archive-core -- moderation run --config moderation.yml
 | `gift.overflow_template` | `{nickname}` |
 | 欢迎、入团模板 | `{nickname}`（进场欢迎为合并名单，入团为单人昵称） |
 | 升级模板 | `{nickname}`、`{level_name}`、`{new_level}` |
+
+昵称映射按平台和用户 ID 应用于礼物感谢、普通及身份进场欢迎、入团欢迎和升级祝贺；未配置映射时使用平台昵称。合并欢迎逐人应用映射，身份识别和去重仍使用原用户 ID。
 
 `{{` / `}}` 表示字面大括号。模板不会执行脚本；空模板、控制字符、未知变量会报错，关闭的规则也会检查模板。礼物固定按用户独立等待静默 5 秒，期间有新增礼物则重新等待 5 秒；礼物名称拼接超过 30 个 Unicode 字符时采用 `overflow_template`。这两个数值暂不开放配置。
 

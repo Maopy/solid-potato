@@ -1,8 +1,8 @@
 //! Room-scoped periodic text selection. Dispatch still uses the ordinary fill queue.
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct TimedConfig {
     pub enabled: bool,
@@ -86,6 +86,18 @@ impl TimedMessages {
             self.waiting_ready = false;
             self.due = now.saturating_add(self.config.interval_seconds * 1000);
         }
+    }
+    /// A changed schedule starts a fresh interval and comment window.
+    pub fn update_config(&mut self, config: TimedConfig, now: u64, max_chars: usize) -> Result<()> {
+        config.validate(max_chars)?;
+        if self.config != config {
+            self.due = now.saturating_add(config.interval_seconds * 1000);
+            self.comments = 0;
+            self.waiting_ready = false;
+            self.previous = None;
+            self.config = config;
+        }
+        Ok(())
     }
     pub fn observe_comment(
         &mut self,
@@ -248,6 +260,20 @@ mod tests {
     }
     fn add(t: &mut TimedMessages, now: u64, id: &str) {
         t.observe_comment(now, "douyin", &comment(id), false, None);
+    }
+    #[test]
+    fn schedule_update_resets_gates_but_does_not_replay_comments() {
+        let mut t = TimedMessages::new(config(2), 0, true);
+        add(&mut t, 1, "a");
+        let mut updated = config(1);
+        updated.interval_seconds = 10;
+        t.update_config(updated, 100, 80).unwrap();
+        assert_eq!(t.status(100)["comments_since_last"], 0);
+        add(&mut t, 101, "a");
+        assert_eq!(t.status(101)["comments_since_last"], 0);
+        add(&mut t, 102, "b");
+        assert!(t.tick(10_099, true).is_none());
+        assert!(t.tick(10_100, true).is_some());
     }
     #[test]
     fn both_conditions_are_required_in_either_order_and_reset_after_generation() {

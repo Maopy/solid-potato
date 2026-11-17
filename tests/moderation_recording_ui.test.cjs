@@ -20,6 +20,13 @@ function setup(options={}){
   const context={document,fetch,location:{origin:'https://live.douyin.com',pathname:'/123',href:'https://live.douyin.com/123'},performance:{getEntriesByType:()=>options.empty?[]:[{name:'https://media.example.test/current.flv'}]},setInterval(){},clearInterval(){},URL,console,sdk:{onDispose:fn=>disposer=fn},PerformanceObserver:class{constructor(fn){observer=fn;}observe(){}disconnect(){}}};context.window=context;
   vm.createContext(context);vm.runInContext(source,context);return {context,nodes,requests,body,observe:entries=>observer({getEntries:()=>entries}),dispose:()=>disposer?.(),get platformCalls(){return platformCalls;}};
 }
+test('speech prefers the newest observed URL when stream quality is equal',()=>{
+ const e=setup({empty:true});
+ e.observe([{name:'https://media.example.test/old.flv?token=old'}]);
+ e.observe([{name:'https://media.example.test/new.flv?token=new'}]);
+ assert.equal(e.context.__liveArchiveRecordingController.getAudioSource(),'https://media.example.test/new.flv?token=new');
+ e.dispose();
+});
 test('recording is explicit, preserves native fetch, and pause/resume use download tasks without chat',async()=>{
   const e=setup();assert.equal(e.requests.length,0);
   const record=e.nodes.find(n=>n.textContent==='录制直播');await record.onclick();
@@ -80,4 +87,11 @@ test('nested SDK quality labels and bitrate survive resource refreshes',async()=
  e.observe([{name:'https://media.example.test/origin-high.flv'}]);
  await e.context.__liveArchiveRecordingController.start();
  assert.equal(e.requests[0].body.objects[0].content.live.stream_url,'https://media.example.test/origin-high.flv');e.dispose();
+});
+test('uses highest source even when a lower bitrate 1080p source is available',async()=>{
+ const e=setup({empty:true});
+ const stream_data=JSON.stringify({data:{origin:{main:{flv:'https://media.example.test/high.flv',sdk_params:JSON.stringify({resolution:'1080x1920',vbitrate:9000000})},backup:{flv:'https://media.example.test/target.flv',sdk_params:JSON.stringify({resolution:'1080x1920',vbitrate:2500000})}},hd:{main:{flv:'https://media.example.test/720.flv',sdk_params:JSON.stringify({resolution:'720x1280',vbitrate:2400000})}}}});
+ e.context.sdk.observeRoomMetadata({data:{data:[{stream_url:{live_core_sdk_data:{pull_data:{stream_data}}}}]}},'https://live.douyin.com/webcast/room/web/enter?web_rid=123');
+ await e.context.__liveArchiveRecordingController.start();
+ assert.equal(e.requests[0].body.objects[0].content.live.stream_url,'https://media.example.test/high.flv');e.dispose();
 });

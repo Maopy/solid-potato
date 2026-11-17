@@ -16,6 +16,10 @@ async fn wechat_textarea_submits_once_with_duplicate_command_and_lost_receipt() 
     exercise("textarea", Some("auto")).await;
 }
 #[tokio::test]
+async fn wechat_verified_background_room_sends_through_backend() {
+    exercise("textarea", Some("background")).await;
+}
+#[tokio::test]
 async fn wechat_contenteditable_submits_once_with_duplicate_command_and_lost_receipt() {
     exercise("contenteditable", Some("auto")).await;
 }
@@ -166,7 +170,13 @@ async fn exercise(editor: &str, scenario: Option<&str>) {
     let bootstrap = temp.path().join("bootstrap.js");
     std::fs::write(
         &bootstrap,
-        bridge.bootstrap(&bridge.relay_token.clone()).unwrap(),
+        if scenario == Some("background") {
+            bridge
+                .bootstrap_for_room(&bridge.relay_token.clone(), Some("fixture-recipient"))
+                .unwrap()
+        } else {
+            bridge.bootstrap(&bridge.relay_token.clone()).unwrap()
+        },
     )
     .unwrap();
     let mut server = ProbeServer::bind(bridge).await.unwrap();

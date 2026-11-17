@@ -418,7 +418,7 @@ impl Element for TextElement {
         };
         let style = window.text_style();
         let (display, color) = if content.is_empty() {
-            (input.placeholder.clone(), style.color)
+            (input.placeholder.clone(), rgb(0x758695).into())
         } else {
             (content, style.color)
         };
@@ -444,7 +444,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_position, bounds.top()),
                         size(px(1.), bounds.bottom() - bounds.top()),
                     ),
-                    rgb(0x9ccaff),
+                    rgb(0x73d0ff),
                 )),
             )
         } else {
@@ -460,7 +460,7 @@ impl Element for TextElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(0x335e9cff),
+                    rgba(0x245b7aff),
                 )),
                 None,
             )
@@ -528,14 +528,16 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
-            .h(px(38.))
+            .h(px(28.))
             .w_full()
-            .px_3()
+            .px_2()
             .items_center()
             .rounded_md()
-            .bg(rgb(0x252c36))
+            .text_xs()
+            .text_color(rgb(0xe6e1cf))
+            .bg(rgb(0x0d141c))
             .border_1()
-            .border_color(rgb(0x3a4555))
+            .border_color(rgb(0x344354))
             .child(TextElement { input: cx.entity() })
     }
 }

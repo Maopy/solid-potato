@@ -45,9 +45,14 @@ jobs:
       - run: python -X utf8 tests/release_package_test.py
       - run: python -X utf8 tests/release_artifacts_test.py
       - run: python -X utf8 tests/windows_asyncio_test.py
-      - run: python -X utf8 tests/firered_worker_test.py
+      - run: python -X utf8 tests/funasr_worker_test.py
       - run: node --test tests/*.test.cjs
       - run: cargo build -p live-archive-core --release --locked
+      - name: Build Windows desktop app
+        if: matrix.target == 'windows-x64'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: cargo build --manifest-path crates/live-archive-tauri/Cargo.toml --release --locked
       - run: python -X utf8 release/package.py --target '${{ matrix.target }}'
       - uses: actions/upload-artifact@v4
         with:

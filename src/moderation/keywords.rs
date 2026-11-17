@@ -111,6 +111,12 @@ impl KeywordReplies {
     pub fn set_active(&mut self, active: bool) {
         self.active = active;
     }
+    /// Retain deduplication and cooldown history across rule edits.
+    pub fn update_config(&mut self, config: KeywordConfig, max_chars: usize) -> Result<()> {
+        config.validate(max_chars)?;
+        self.config = config;
+        Ok(())
+    }
     pub fn status(&self) -> Value {
         json!({"enabled":self.config.enabled,"active":self.active&&self.config.enabled,"rules":self.config.rules.len(),
             "cooldown_seconds":self.config.cooldown_seconds,"generated":self.generated,"suppressed":self.suppressed,"last_keyword":self.last_keyword})
@@ -130,8 +136,10 @@ impl KeywordReplies {
         let valid_source = event.source_kind == "network"
             && match platform {
                 "wechat_channels" => {
-                    event.event_type == "chat.keyword_candidate"
-                        && p["decoder"] == "wechat.msg_list.keyword.v1"
+                    ((event.event_type == "chat.keyword_candidate"
+                        && p["decoder"] == "wechat.msg_list.keyword.v1")
+                        || (event.event_type == "chat.activity"
+                            && p["decoder"] == "wechat.msg_list.activity.v1"))
                         && p["message_type"] == 1
                         && p["keyword_live"] == true
                 }
@@ -225,6 +233,27 @@ mod tests {
     }
     fn event(id: &str, text: &str, platform: &str) -> ProbeEvent {
         serde_json::from_value(json!({"seq":1,"event_id":id,"event_type":if platform=="douyin"{"chat.received"}else{"chat.keyword_candidate"},"source_kind":"network","user_id":"viewer","native_event_id":id,"payload":{"content":text,"decoder":if platform=="douyin"{"douyin.pb.v1"}else{"wechat.msg_list.keyword.v1"},"message_type":1,"keyword_live":true,"live_eligible":true,"observed_at_ms":chrono::Utc::now().timestamp_millis()}})).unwrap()
+    }
+    #[test]
+    fn wechat_live_activity_is_matched_by_backend() {
+        let mut k = KeywordReplies::new(config(), true);
+        let mut unrelated = event("first", "普通留言", "wechat_channels");
+        unrelated.event_type = "chat.activity".into();
+        unrelated.payload["decoder"] = json!("wechat.msg_list.activity.v1");
+        assert!(
+            k.ingest(0, "wechat_channels", &unrelated, false, None)
+                .is_none()
+        );
+        let mut matching = unrelated;
+        matching.event_id = "second".into();
+        matching.native_event_id = Some("second".into());
+        matching.payload["content"] = json!("这是胎记吗");
+        assert_eq!(
+            k.ingest(1, "wechat_channels", &matching, false, None)
+                .unwrap()
+                .text,
+            "手臂是胎记"
+        );
     }
     #[test]
     fn cooldown_shared_by_reply_and_keyword_without_replaying_duplicates() {

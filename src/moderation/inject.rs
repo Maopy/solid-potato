@@ -39,7 +39,10 @@ pub fn render_addon_with_prefix(
         "__CONFIG_JSON_STRING__",
         &serde_json::to_string(&config.to_string()).expect("serializing config string"),
     );
-    format!("{}\n{addon}", include_str!("../../assets/moderation/proxy/windows_asyncio.py"))
+    format!(
+        "{}\n{addon}",
+        include_str!("../../assets/moderation/proxy/windows_asyncio.py")
+    )
 }
 
 pub fn ignore_hosts(scope: &ProbeScope) -> Result<String> {
@@ -294,8 +297,11 @@ impl ProbeSidecar {
                 use std::os::unix::fs::PermissionsExt;
                 fs::set_permissions(&sidecar.addon_path, fs::Permissions::from_mode(0o600))?;
             }
+            let mut command = Command::new(executable);
+            #[cfg(windows)]
+            command.creation_flags(0x08000000);
             sidecar.child = Some(
-                Command::new(executable)
+                command
                     .args(["-q", "--listen-host", "127.0.0.1", "--listen-port"])
                     .arg(port.to_string())
                     .args([

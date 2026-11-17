@@ -14,6 +14,21 @@ spec.loader.exec_module(package)
 
 
 class ReleaseConfigInheritance(unittest.TestCase):
+    def test_local_asr_is_inherited_without_overriding_explicit_config(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'old' / 'config'
+            source.mkdir(parents=True)
+            (source.parent / 'asr.dev.json').write_text('funasr', encoding='utf-8')
+            output = root / 'new'
+            output.mkdir()
+            package.inherit_local_asr(source, output)
+            self.assertEqual((output / 'asr.dev.json').read_text(encoding='utf-8'), 'funasr')
+            (output / 'asr.dev.json').write_text('explicit', encoding='utf-8')
+            package.inherit_local_asr(source, output)
+            self.assertEqual((output / 'asr.dev.json').read_text(encoding='utf-8'), 'explicit')
+            package.inherit_local_asr(None, output)
+
     def test_local_packaging_uses_the_current_host(self):
         for system, machine, expected in [('Windows', 'AMD64', 'windows-x64'),
                                            ('Darwin', 'arm64', 'macos-arm64'),
@@ -101,6 +116,21 @@ class ReleaseConfigInheritance(unittest.TestCase):
         self.assertIn('run.cmd', assets)
         self.assertNotIn('run.sh', assets)
         self.assertNotIn('live-archive-core', assets)
+
+    def test_windows_desktop_release_uses_executable_entrypoint(self):
+        repo = Path(__file__).resolve().parents[1]
+        assets = package.release_assets(repo, '0.4.1', 'windows-x64')
+        self.assertIn('启动场控.exe', assets)
+        self.assertIn('live-archive-core.exe', assets)
+        self.assertNotIn('启动场控.cmd', assets)
+        self.assertNotIn('run.cmd', assets)
+
+    def test_minor_release_uses_tauri_without_changing_older_release(self):
+        repo = Path(__file__).resolve().parents[1]
+        old = package.release_assets(repo, '0.4.36', 'windows-x64')
+        new = package.release_assets(repo, '0.5.0', 'windows-x64')
+        self.assertEqual(old['启动场控.exe'].name, 'live-archive-gui.exe')
+        self.assertEqual(new['启动场控.exe'].name, 'live-archive-tauri.exe')
 
     def test_windows_zip_preserves_chinese_paths_and_excludes_runtime_data(self):
         with tempfile.TemporaryDirectory() as temporary:
